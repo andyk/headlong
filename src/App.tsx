@@ -105,7 +105,41 @@ function App() {
           <div>
             <h1>{agent.name}</h1>
             <p>{agent.created_at}</p>
-            <p>{agent.thoughts.length} thoughts</p>
+          {/*<p>{agent.thoughts.length} thoughts</p>*/}
+          <ScrollToBottom className="overflow-auto whitespace-pre border border-gray-500">
+              {agent
+                ?.thoughts.map((thought, index) => {
+                    let className =
+                        "m-1 cursor-pointer bg-zinc-800 rounded-sm flex h-[25px] overflow-auto w-full";
+                    if (index === selectedThoughtIndex) {
+                        className +=
+                            " border border-blue-600 bg-blue-950";
+                    }
+                    if (!textAreaRefs.current[index]) {
+                        textAreaRefs.current[index] = createRef();
+                    }
+                    return (
+                        <TextareaAutosize
+                            ref={(el) => textAreaRefs.current[index] = el}
+                            className={className}
+                            value={thought.body ?? ""}
+                            onChange={(e) => {
+                                console.log(`in onChange for thought index ${index}`)
+                                //FIX ME setAgent(old => old.updateSelectedThought(e.target.value));
+                                e.target.style.height = 'auto';
+                                e.target.style.height = e.target.scrollHeight + 'px';
+                            }}
+                            onFocus={() => {
+                                if (selectedThoughtIndex === index) {
+                                    return;
+                                }
+                                setSelectedThoughtIndex(index);
+                            }}
+                        />
+                    );
+                })
+            }
+            </ScrollToBottom>
           </div>
         ) : (
           <h1>Select an agent</h1>
