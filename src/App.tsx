@@ -74,6 +74,23 @@ function App() {
     }
   }, [selectedAgentName]);
 
+  useEffect(() => {
+    console.log("pushing the updated agent to supabase");
+    if (agent) {
+      (async () => {
+        const { data, error } = await supabase
+          .from("agents")
+          .update(agent)
+          .eq("name", agent.name)
+        if (error) {
+          console.log(error);
+        } else {
+          console.log("agent updated in supabase: ", data);
+        }
+      })();
+    }
+  }, [agent]);
+
   const textAreaRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
 
   return (
@@ -125,7 +142,22 @@ function App() {
                             value={thought.body ?? ""}
                             onChange={(e) => {
                                 console.log(`in onChange for thought index ${index}`)
-                                //FIX ME setAgent(old => old.updateSelectedThought(e.target.value));
+                                setAgent(ag => {
+                                  if (!ag) {
+                                    return ag
+                                  }
+                                  return {
+                                    ...agent,
+                                    thoughts: [
+                                      ...ag.thoughts.slice(0, index-1),
+                                      {
+                                        ...ag.thoughts[index],
+                                        body: e.target.value
+                                      },
+                                      ...ag.thoughts.slice(index+1)
+                                    ]
+                                  }
+                                });
                                 e.target.style.height = 'auto';
                                 e.target.style.height = e.target.scrollHeight + 'px';
                             }}
