@@ -75,13 +75,14 @@ function App() {
   }, [selectedAgentName]);
 
   useEffect(() => {
-    console.log("pushing the updated agent to supabase");
+    console.log("pushing the updated agent to supabase: ", agent);
     if (agent) {
       (async () => {
         const { data, error } = await supabase
           .from("agents")
           .update(agent)
           .eq("name", agent.name)
+          .select()
         if (error) {
           console.log(error);
         } else {
@@ -95,11 +96,11 @@ function App() {
 
   return (
     <>
-     { agentNameList ? (
+     { agentNameList.length > 0 ? (
       <select
         id="agent-selector"
         className="bg-[#121212] border border-gray-600 px-2 m-2"
-        value={selectedAgentName}
+        value={selectedAgentName ?? ""}
         onChange={(event) => {
           console.log("selected agent: ", event.target.value)
           const newAgentNameSelected = event.target.value;
@@ -137,6 +138,7 @@ function App() {
                     }
                     return (
                         <TextareaAutosize
+                            key={index}
                             ref={(el) => textAreaRefs.current[index] = el}
                             className={className}
                             value={thought.body ?? ""}
