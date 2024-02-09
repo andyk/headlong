@@ -556,6 +556,10 @@ video {
   display: flex;
 }
 
+.contents {
+  display: contents;
+}
+
 .h-\[25px\] {
   height: 25px;
 }

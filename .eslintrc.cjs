@@ -14,5 +14,6 @@ module.exports = {
       'warn',
       { allowConstantExport: true },
     ],
+    "max-len": ["error", { "code": 120, "tabWidth": 2, "ignoreUrls": true }],
   },
 }
