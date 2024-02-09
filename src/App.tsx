@@ -1,13 +1,23 @@
-import { useEffect, useState, createRef, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import "./App-compiled.css";
 import supabase from "./supabase";
 import openai from "./openai";
-import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import ScrollToBottom from "react-scroll-to-bottom";
-import TextareaAutosize from "react-textarea-autosize";
+import {
+  ChatCompletionAssistantMessageParam,
+  ChatCompletionSystemMessageParam,
+  ChatCompletionMessageParam,
+} from "openai/resources/chat/completions";
+import { Editor, EditorState, ContentState } from "draft-js";
 
-export type Thought = {
+// In the database, we store thought body as a string.
+export type ThoughtRow = {
   body: string;
+  human_generated_slices: [number, number][];
+  open_ai_embedding?: number[];
+};
+// We use the `EditorState` type from `draft-js` to represent the body of each thought.
+export type Thought = {
+  body: EditorState;
   human_generated_slices: [number, number][];
   open_ai_embedding?: number[];
 };
@@ -23,7 +33,7 @@ type Agent = {
 
 function App() {
   const [agentNameList, setAgentNameList] = useState<string[]>([]);
-  const [selectedAgentName, setSelectedAgentName] = useState<string>(null);
+  const [selectedAgentName, setSelectedAgentName] = useState<string | null>(null);
   const [agent, setAgent] = useState<Agent | null>(null);
   const [selectedThoughtIndex, setSelectedThoughtIndex] = useState<number | null>(null);
 
@@ -31,16 +41,26 @@ function App() {
     messages: ChatCompletionMessageParam[];
     max_tokens?: number;
     temperature?: number;
+    stream?: boolean; // Add stream option
+    onDelta: (delta: any) => void; // Callback to handle incoming data
   }) {
+    // Assuming the OpenAI SDK has an event emitter or callback mechanism for streaming
     const completion = await openai.chat.completions.create({
       model: "gpt-4-1106-preview",
       messages: options.messages,
       max_tokens: options.max_tokens ?? 100,
       temperature: options.temperature ?? 0.5,
+      stream: options.stream ?? true,
     });
+
+    const stream = completion as AsyncIterable<any>;
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || "";
+      options.onDelta(delta); // Invoke the callback with the incoming delta
+    }
+
     return completion;
   }
-
   async function getAgent(name: string): Promise<Agent> {
     const { data: agent, error } = await supabase.from("agents").select("*").eq("name", name).maybeSingle();
     if (error) {
@@ -49,7 +69,16 @@ function App() {
     } else if (!agent) {
       throw new Error(`No agent found with name ${name}`);
     }
-    return agent;
+    console.log("got agent", agent);
+    return {
+      ...agent,
+      thoughts: agent.thoughts.map((thought: ThoughtRow) => {
+        return {
+          ...thought,
+          body: EditorState.createWithContent(ContentState.createFromText(thought.body))
+        };
+      })
+    };
   }
 
   useEffect(() => {
@@ -75,6 +104,7 @@ function App() {
     if (!selectedAgentName) {
       console.log("no agent selected");
     } else {
+      console.log("agent selected " + selectedAgentName);
       (async () => {
         setAgent(await getAgent(selectedAgentName));
       })();
@@ -83,25 +113,36 @@ function App() {
 
   useEffect(() => {
     if (agent) {
+      const agentWithBodyAsString = {
+        ...agent,
+        thoughts: agent.thoughts.map((thought) => {
+          return {
+            ...thought,
+            body: thought.body.getCurrentContent().getPlainText(),
+          };
+        }),
+      };
       (async () => {
-        const { data, error } = await supabase.from("agents").update(agent).eq("name", agent.name).select();
+        const { error } = await supabase.from("agents").update(agentWithBodyAsString).eq("name", agent.name);
         if (error) {
           console.log(error);
+        } else {
+          console.log("got agent");
         }
       })();
     }
   }, [agent]);
 
   useEffect(() => {
-    const selectedTextArea = textAreaRefs.current[selectedThoughtIndex ?? 0];
-    if (selectedTextArea) {
-      selectedTextArea.focus();
+    const selectedCell = cellRefs.current[selectedThoughtIndex ?? 0];
+    if (selectedCell) {
+      selectedCell.focus();
       // put cursor at end of text
-      selectedTextArea.setSelectionRange(selectedTextArea.value.length, selectedTextArea.value.length);
+      //selectedCell.setSelectionRange(selectedCell.value.length, selectedCell.value.length);
     }
   }, [selectedThoughtIndex]);
 
-  const textAreaRefs = useRef<(HTMLTextAreaElement | null)[]>([]);
+  const cellRefs = useRef<any>([null]);
 
   return (
     <>
@@ -125,95 +166,94 @@ function App() {
         </select>
       ) : null}
       <div>
-        {agent ? (
+        {agent != null ? (
           <div>
             <h1>{agent.name}</h1>
             <p>{agent.created_at}</p>
             <div>
-              <ScrollToBottom className="overflow-auto whitespace-pre border border-gray-500">
+              <div className="overflow-auto whitespace-pre border border-gray-500">
                 <div className="flex flex-col">
-                  {agent?.thoughts.map((thought, index) => {
+                  {agent.thoughts.map((thought, index) => {
                     let className = "m-1 cursor-pointer bg-zinc-800 rounded-sm h-[25px] overflow-auto w-full";
                     if (index === selectedThoughtIndex) {
                       className += " border border-blue-600 bg-blue-950";
                     }
-                    if (!textAreaRefs.current[index]) {
-                      textAreaRefs.current[index] = createRef();
+                    if (!cellRefs.current[index]) {
+                      cellRefs.current[index] = null;
                     }
                     return (
-                      <TextareaAutosize
-                        key={index}
-                        ref={(el) => (textAreaRefs.current[index] = el)}
-                        className={className}
-                        value={thought.body ?? ""}
-                        onChange={(e) => {
-                          console.log(`in onChange for thought index ${index}`);
-                          setAgent((ag) => {
-                            if (ag === null) {
-                              return ag;
+                      <div className={className}>
+                        <Editor
+                          key={index}
+                          ref={(el) => (cellRefs.current[index] = el)}
+                          editorState={thought.body}
+                          onChange={(e) => {
+                            console.log(`in onChange for thought index ${index}`);
+                            setAgent((ag) => {
+                              if (ag === null) {
+                                return ag;
+                              }
+                              const newThoughts = [...ag.thoughts];
+                              newThoughts[index] = {
+                                ...newThoughts[index],
+                                body: e,
+                              };
+                              return {
+                                ...ag,
+                                thoughts: newThoughts,
+                              };
+                            });
+                          }}
+                          onFocus={() => {
+                            if (selectedThoughtIndex === index) {
+                              return;
                             }
-                            const newThoughts = [...ag.thoughts];
-                            newThoughts[index] = {
-                              ...newThoughts[index],
-                              body: e.target.value,
-                            };
-                            return {
-                              ...ag,
-                              thoughts: newThoughts,
-                            };
-                          });
-                          e.target.style.height = "auto";
-                          e.target.style.height = e.target.scrollHeight + "px";
-                        }}
-                        onFocus={() => {
-                          if (selectedThoughtIndex === index) {
-                            return;
-                          }
-                          setSelectedThoughtIndex(index);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            console.log("Enter key pressed");
-                            setAgent((old) => {
-                              if (old === null) {
-                                return old;
-                              }
-                              const newThoughts = [...old.thoughts];
-                              newThoughts.splice(index + 1, 0, {
-                                body: "",
-                                human_generated_slices: [],
-                              });
-                              return {
-                                ...old,
-                                thoughts: newThoughts,
-                              };
-                            });
-                            setSelectedThoughtIndex((i) => (i ?? 0) + 1);
-                          }
-                          if (e.key === "Backspace" && thought.body === "") {
-                            e.preventDefault();
-                            console.log("Backspace key pressed");
-                            setAgent((old) => {
-                              if (old === null || old.thoughts.length <= 1) {
-                                return old;
-                              }
-                              const newThoughts = [...old.thoughts];
-                              newThoughts.splice(index, 1); // Remove the current thought
+                            setSelectedThoughtIndex(index);
+                          }}
+                          //onKeyDown={(e) => {
+                          //  if (e.key === "Enter" && !e.shiftKey) {
+                          //    e.preventDefault();
+                          //    console.log("Enter key pressed");
+                          //    setAgent((old) => {
+                          //      if (old === null) {
+                          //        return old;
+                          //      }
+                          //      const newThoughts = [...old.thoughts];
+                          //      newThoughts.splice(index + 1, 0, {
+                          //        body: "",
+                          //        human_generated_slices: [],
+                          //      });
+                          //      return {
+                          //        ...old,
+                          //        thoughts: newThoughts,
+                          //      };
+                          //    });
+                          //    setSelectedThoughtIndex((i) => (i ?? 0) + 1);
+                          //  }
+                          //  if (e.key === "Backspace" && thought.body === "") {
+                          //    e.preventDefault();
+                          //    console.log("Backspace key pressed");
+                          //    setAgent((old) => {
+                          //      if (old === null || old.thoughts.length <= 1) {
+                          //        return old;
+                          //      }
+                          //      const newThoughts = [...old.thoughts];
+                          //      newThoughts.splice(index, 1); // Remove the current thought
 
-                              return {
-                                ...old,
-                                thoughts: newThoughts,
-                              };
-                            });
-                            setSelectedThoughtIndex((i) => ((i ?? 0) === 0 ? 0 : (i ?? 0) - 1));
-                          }
-                        }}
-                      />
+                          //      return {
+                          //        ...old,
+                          //        thoughts: newThoughts,
+                          //      };
+                          //    });
+                          //    setSelectedThoughtIndex((i) => ((i ?? 0) === 0 ? 0 : (i ?? 0) - 1));
+                          //  }
+                          //}}
+                        />
+                      </div>
                     );
                   })}
                 </div>
-              </ScrollToBottom>
+              </div>
             </div>
           </div>
         ) : (
@@ -223,32 +263,65 @@ function App() {
       <div>
         <button
           onClick={() => {
-            // call gpt4TurboChat() with the contents of agent.thoughts[selectedThoughtIndex]
-            // and then add a new thought to agent.thoughts with the response from gpt4TurboChat()
             if (agent === null) {
               return;
             }
-            const messages: ChatCompletionMessageParam[] = agent.thoughts.map(({ body: message }) => ({
-              role: "agent",
-              content: message,
-            }));
-            gpt4TurboChat({ messages: messages }).then((response) => {
-              setAgent((old) => {
-                if (old === null) {
-                  return old;
-                }
-                const newThoughts = [...old.thoughts];
-                newThoughts.splice((selectedThoughtIndex ?? 0) + 1, 0, {
-                  body: response.choices[0].message.content ?? "",
-                  human_generated_slices: [],
-                });
-                return {
-                  ...old,
-                  thoughts: newThoughts,
-                };
+            let accumulatedText = "";
+            const sysMessage: ChatCompletionSystemMessageParam = {
+              role: "system",
+              content: "Come up with the next thought based on the following stream of thoughts",
+            };
+            const assistantMessages: ChatCompletionAssistantMessageParam[] = agent.thoughts
+              .slice(0, selectedThoughtIndex ?? 0 + 1)
+              .map((thought) => ({ role: "assistant", content: thought.body.getCurrentContent().getPlainText() }));
+            const messages = [sysMessage, ...assistantMessages];
+            // First add a new empty thought to the agent
+            setAgent((old) => {
+              if (old === null) {
+                return old;
+              }
+              const newThoughts = [...old.thoughts];
+              newThoughts.splice((selectedThoughtIndex ?? 0) + 1, 0, {
+                body: EditorState.createEmpty(),
+                human_generated_slices: [],
               });
-              setSelectedThoughtIndex((i) => (i ?? 0) + 1);
+              return {
+                ...old,
+                thoughts: newThoughts,
+              };
             });
+            setSelectedThoughtIndex((i) => (i ?? 0) + 1);
+            // Then fill that thought in.
+            gpt4TurboChat({
+              messages: messages,
+              stream: true,
+              onDelta: (delta) => {
+                if (delta) {
+                  accumulatedText += delta;
+                  setAgent((old) => {
+                    if (old === null) {
+                      return null;
+                    }
+                    const newThoughts = [...old.thoughts];
+                    const newThoughtIndex = (selectedThoughtIndex ?? 0) + 1;
+                    newThoughts[newThoughtIndex].body = EditorState.createWithContent(
+                      ContentState.createFromText(accumulatedText)
+                    );
+                    return {
+                      ...old,
+                      thoughts: newThoughts,
+                    };
+                  });
+                }
+              },
+            })
+              .then(() => {
+                console.log("Streaming complete");
+                // Additional actions if needed after streaming is complete
+              })
+              .catch((error) => {
+                console.error("Error with streaming:", error);
+              });
           }}
         >
           Generate
@@ -261,7 +334,7 @@ function App() {
               }
               const newThoughts = [...old.thoughts];
               newThoughts.splice((selectedThoughtIndex ?? 0) + 1, 0, {
-                body: "",
+                body: EditorState.createEmpty(),
                 human_generated_slices: [],
               });
               return {
