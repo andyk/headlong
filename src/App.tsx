@@ -7,7 +7,10 @@ import {
   ChatCompletionSystemMessageParam,
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
-import { Editor, EditorState, ContentState } from "draft-js";
+import { Editor, EditorState, ContentState, getDefaultKeyBinding, KeyBindingUtil } from "draft-js";
+
+const { hasCommandModifier } = KeyBindingUtil;
+type SyntheticKeyboardEvent = React.KeyboardEvent<{}>;
 
 // In the database, we store thought body as a string.
 export type ThoughtRow = {
@@ -61,6 +64,61 @@ function App() {
 
     return completion;
   }
+
+  function myKeyBindingFn(e: SyntheticKeyboardEvent): string | null {
+    if (e.key === "Enter" && !e.shiftKey) {
+      return "new-cell";
+    }
+    if (
+      e.key === "Backspace" &&
+      selectedThoughtIndex &&
+      agent?.thoughts[selectedThoughtIndex].body.getCurrentContent().getPlainText() === ""
+    ) {
+      return "delete-cell";
+    }
+    return getDefaultKeyBinding(e);
+  }
+
+  function handleKeyCommand(command: string, index: number) {
+    if (command === "new-cell") {
+      console.log("Enter key pressed");
+      setAgent((old) => {
+        if (old === null) {
+          return old;
+        }
+        const newThoughts = [...old.thoughts];
+        newThoughts.splice(index + 1, 0, {
+          body: EditorState.createEmpty(),
+          human_generated_slices: [],
+        });
+        return {
+          ...old,
+          thoughts: newThoughts,
+        };
+      });
+      setSelectedThoughtIndex((i) => (i ?? 0) + 1);
+      return "handled";
+    }
+    if (command === "delete-cell") {
+      console.log("Backspace key pressed on empty cell");
+      setAgent((old) => {
+        if (old === null || old.thoughts.length <= 1) {
+          return old;
+        }
+        const newThoughts = [...old.thoughts];
+        newThoughts.splice(index, 1); // Remove the current thought
+
+        return {
+          ...old,
+          thoughts: newThoughts,
+        };
+      });
+      setSelectedThoughtIndex((i) => ((i ?? 0) === 0 ? 0 : (i ?? 0) - 1));
+      return "handled";
+    }
+    return "not-handled";
+  }
+
   async function getAgent(name: string): Promise<Agent> {
     const { data: agent, error } = await supabase.from("agents").select("*").eq("name", name).maybeSingle();
     if (error) {
@@ -75,9 +133,9 @@ function App() {
       thoughts: agent.thoughts.map((thought: ThoughtRow) => {
         return {
           ...thought,
-          body: EditorState.createWithContent(ContentState.createFromText(thought.body))
+          body: EditorState.createWithContent(ContentState.createFromText(thought.body)),
         };
-      })
+      }),
     };
   }
 
@@ -168,93 +226,92 @@ function App() {
       <div>
         {agent != null ? (
           <div>
-            <h1>{agent.name}</h1>
-            <p>{agent.created_at}</p>
-            <div>
-              <div className="overflow-auto whitespace-pre border border-gray-500">
-                <div className="flex flex-col">
-                  {agent.thoughts.map((thought, index) => {
-                    let className = "m-1 cursor-pointer bg-zinc-800 rounded-sm h-[25px] overflow-auto w-full";
-                    if (index === selectedThoughtIndex) {
-                      className += " border border-blue-600 bg-blue-950";
-                    }
-                    if (!cellRefs.current[index]) {
-                      cellRefs.current[index] = null;
-                    }
-                    return (
-                      <div className={className}>
-                        <Editor
-                          key={index}
-                          ref={(el) => (cellRefs.current[index] = el)}
-                          editorState={thought.body}
-                          onChange={(e) => {
-                            console.log(`in onChange for thought index ${index}`);
-                            setAgent((ag) => {
-                              if (ag === null) {
-                                return ag;
-                              }
-                              const newThoughts = [...ag.thoughts];
-                              newThoughts[index] = {
-                                ...newThoughts[index],
-                                body: e,
-                              };
-                              return {
-                                ...ag,
-                                thoughts: newThoughts,
-                              };
-                            });
-                          }}
-                          onFocus={() => {
-                            if (selectedThoughtIndex === index) {
-                              return;
+            <h1 className={"pb-2"}>{agent.name}</h1>
+            <>
+              <div className="flex flex-col">
+                {agent.thoughts.map((thought, index) => {
+                  let className =
+                    "editor-container m-1 cursor-pointer bg-zinc-800 rounded-sm h-[25px] overflow-auto w-full";
+                  if (index === selectedThoughtIndex) {
+                    className += " border border-blue-600 bg-blue-950";
+                  }
+                  if (!cellRefs.current[index]) {
+                    cellRefs.current[index] = null;
+                  }
+                  return (
+                    <div key={index} className={className}>
+                      <Editor
+                        ref={(el) => (cellRefs.current[index] = el)}
+                        editorState={thought.body}
+                        onChange={(e) => {
+                          console.log(`in onChange for thought index ${index}`);
+                          setAgent((ag) => {
+                            if (ag === null) {
+                              return ag;
                             }
-                            setSelectedThoughtIndex(index);
-                          }}
-                          //onKeyDown={(e) => {
-                          //  if (e.key === "Enter" && !e.shiftKey) {
-                          //    e.preventDefault();
-                          //    console.log("Enter key pressed");
-                          //    setAgent((old) => {
-                          //      if (old === null) {
-                          //        return old;
-                          //      }
-                          //      const newThoughts = [...old.thoughts];
-                          //      newThoughts.splice(index + 1, 0, {
-                          //        body: "",
-                          //        human_generated_slices: [],
-                          //      });
-                          //      return {
-                          //        ...old,
-                          //        thoughts: newThoughts,
-                          //      };
-                          //    });
-                          //    setSelectedThoughtIndex((i) => (i ?? 0) + 1);
-                          //  }
-                          //  if (e.key === "Backspace" && thought.body === "") {
-                          //    e.preventDefault();
-                          //    console.log("Backspace key pressed");
-                          //    setAgent((old) => {
-                          //      if (old === null || old.thoughts.length <= 1) {
-                          //        return old;
-                          //      }
-                          //      const newThoughts = [...old.thoughts];
-                          //      newThoughts.splice(index, 1); // Remove the current thought
+                            const newThoughts = [...ag.thoughts];
+                            newThoughts[index] = {
+                              ...newThoughts[index],
+                              body: e,
+                            };
+                            return {
+                              ...ag,
+                              thoughts: newThoughts,
+                            };
+                          });
+                        }}
+                        onFocus={() => {
+                          if (selectedThoughtIndex === index) {
+                            return;
+                          }
+                          setSelectedThoughtIndex(index);
+                        }}
+                        handleKeyCommand={(e) => handleKeyCommand(e, index)}
+                        keyBindingFn={myKeyBindingFn}
+                        //onKeyDown={(e) => {
+                        //  if (e.key === "Enter" && !e.shiftKey) {
+                        //    e.preventDefault();
+                        //    console.log("Enter key pressed");
+                        //    setAgent((old) => {
+                        //      if (old === null) {
+                        //        return old;
+                        //      }
+                        //      const newThoughts = [...old.thoughts];
+                        //      newThoughts.splice(index + 1, 0, {
+                        //        body: "",
+                        //        human_generated_slices: [],
+                        //      });
+                        //      return {
+                        //        ...old,
+                        //        thoughts: newThoughts,
+                        //      };
+                        //    });
+                        //    setSelectedThoughtIndex((i) => (i ?? 0) + 1);
+                        //  }
+                        //  if (e.key === "Backspace" && thought.body === "") {
+                        //    e.preventDefault();
+                        //    console.log("Backspace key pressed");
+                        //    setAgent((old) => {
+                        //      if (old === null || old.thoughts.length <= 1) {
+                        //        return old;
+                        //      }
+                        //      const newThoughts = [...old.thoughts];
+                        //      newThoughts.splice(index, 1); // Remove the current thought
 
-                          //      return {
-                          //        ...old,
-                          //        thoughts: newThoughts,
-                          //      };
-                          //    });
-                          //    setSelectedThoughtIndex((i) => ((i ?? 0) === 0 ? 0 : (i ?? 0) - 1));
-                          //  }
-                          //}}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
+                        //      return {
+                        //        ...old,
+                        //        thoughts: newThoughts,
+                        //      };
+                        //    });
+                        //    setSelectedThoughtIndex((i) => ((i ?? 0) === 0 ? 0 : (i ?? 0) - 1));
+                        //  }
+                        //}}
+                      />
+                    </div>
+                  );
+                })}
               </div>
-            </div>
+            </>
           </div>
         ) : (
           <h1>Select an agent</h1>
@@ -271,10 +328,17 @@ function App() {
               role: "system",
               content: "Come up with the next thought based on the following stream of thoughts",
             };
+            console.log("agent.thoughts", agent.thoughts);
+            console.log("selectedThoughtIndex", selectedThoughtIndex);
+            const idx = (selectedThoughtIndex ?? 0) + 1;
+            console.log("idx: ", idx);
+            console.log("agent thoughts slice: ", agent.thoughts.slice(0, idx));
+
             const assistantMessages: ChatCompletionAssistantMessageParam[] = agent.thoughts
-              .slice(0, selectedThoughtIndex ?? 0 + 1)
+              .slice(0, idx)
               .map((thought) => ({ role: "assistant", content: thought.body.getCurrentContent().getPlainText() }));
             const messages = [sysMessage, ...assistantMessages];
+            console.log("messages", messages);
             // First add a new empty thought to the agent
             setAgent((old) => {
               if (old === null) {
@@ -325,27 +389,6 @@ function App() {
           }}
         >
           Generate
-        </button>
-        <button
-          onClick={() => {
-            setAgent((old) => {
-              if (old === null) {
-                return old;
-              }
-              const newThoughts = [...old.thoughts];
-              newThoughts.splice((selectedThoughtIndex ?? 0) + 1, 0, {
-                body: EditorState.createEmpty(),
-                human_generated_slices: [],
-              });
-              return {
-                ...old,
-                thoughts: newThoughts,
-              };
-            });
-            setSelectedThoughtIndex((i) => (i ?? 0) + 1);
-          }}
-        >
-          New Blank
         </button>
       </div>
     </>

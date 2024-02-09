@@ -556,10 +556,6 @@ video {
   display: flex;
 }
 
-.contents {
-  display: contents;
-}
-
 .h-\[25px\] {
   height: 25px;
 }
@@ -580,10 +576,6 @@ video {
   overflow: auto;
 }
 
-.whitespace-pre {
-  white-space: pre;
-}
-
 .rounded-sm {
   border-radius: 0.125rem;
 }
@@ -595,11 +587,6 @@ video {
 .border-blue-600 {
   --tw-border-opacity: 1;
   border-color: rgb(37 99 235 / var(--tw-border-opacity));
-}
-
-.border-gray-500 {
-  --tw-border-opacity: 1;
-  border-color: rgb(107 114 128 / var(--tw-border-opacity));
 }
 
 .border-gray-600 {
@@ -627,11 +614,14 @@ video {
   padding-right: 0.5rem;
 }
 
+.pb-2 {
+  padding-bottom: 0.5rem;
+}
+
 #root {
   max-width: 1280px;
   margin: 0 auto;
   padding: 2rem;
-  text-align: center;
 }
 
 .logo {
@@ -671,4 +661,15 @@ video {
 
 .read-the-docs {
   color: #888;
+}
+
+.editor-container {
+  min-height: 20px;
+  /* Minimum height, adjust as needed */
+  /* No fixed height here to allow for expansion */
+}
+
+.DraftEditor-root {
+  /* Ensure the Draft.js editor itself expands */
+  min-height: inherit;
 }
