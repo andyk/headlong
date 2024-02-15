@@ -552,6 +552,14 @@ video {
   margin: 0.5rem;
 }
 
+.block {
+  display: block;
+}
+
+.inline {
+  display: inline;
+}
+
 .flex {
   display: flex;
 }
@@ -616,6 +624,10 @@ video {
 
 .pb-2 {
   padding-bottom: 0.5rem;
+}
+
+.italic {
+  font-style: italic;
 }
 
 #root {
