@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import "./App-compiled.css";
 import supabase from "./supabase";
 import openai from "./openai";
+import hf from "./huggingface";
 import {
   ChatCompletionAssistantMessageParam,
   ChatCompletionSystemMessageParam,
@@ -61,6 +62,56 @@ function App() {
       const delta = chunk.choices[0]?.delta?.content || "";
       options.onDelta(delta); // Invoke the callback with the incoming delta
     }
+
+    return completion;
+  }
+
+  async function huggingFaceChat(options: {
+    messages: ChatCompletionMessageParam[];
+    max_tokens?: number;
+    temperature?: number;
+    stream?: boolean; // Add stream option
+    onDelta: (delta: any) => void; // Callback to handle incoming data
+  }) {
+
+    // Generate prompt accoriding to HF template. 'user' messages aren't handled
+    prompt = ""
+    for await (const message of options.messages) {
+      switch(message.role) {
+        case 'system':
+          prompt = prompt.concat("<s> [INST] <<SYS>> ", message.content, " </SYS>> [/INST]");
+          break;
+        case 'assistant':
+          prompt = prompt.concat(message.content, "\n");
+          break;
+        default:
+          console.log("Unknown message type");
+      }
+    }
+    console.log("Prompt:\n", prompt);
+
+    const completion = hf.textGenerationStream({
+      inputs: prompt,
+      parameters: {
+        max_tokens: options.max_tokens ?? 100,
+        temperature: options.temperature ?? 0.5,
+        return_full_text: false,
+        // repetition_penalty: 1,
+      }
+    });
+
+    let reply = "";
+    const stream = completion as AsyncIterable<any>;
+    for await (const chunk of stream) {
+      // console.log(chunk);
+      const delta = chunk.token?.text || "";
+      reply = reply.concat(delta);
+      // Llama always finishes assistant completions with </s>, so it should be the last delta
+      if (delta != "</s>") {
+        options.onDelta(delta); // Invoke the callback with the incoming delta
+      }
+    }
+    console.log("Reply:\n", reply);
 
     return completion;
   }
@@ -355,8 +406,8 @@ function App() {
               };
             });
             setSelectedThoughtIndex((i) => (i ?? 0) + 1);
-            // Then fill that thought in.
-            gpt4TurboChat({
+
+            let chatArgs = {
               messages: messages,
               stream: true,
               onDelta: (delta) => {
@@ -378,8 +429,14 @@ function App() {
                   });
                 }
               },
-            })
-              .then(() => {
+            };
+            const chat = import.meta.env.HEADLONG_INFERENCE_SERVICE ==
+              "huggingface" ?
+              huggingFaceChat(chatArgs) :
+              gpt4TurboChat(chatArgs);
+
+            // Then fill that thought in.
+            chat.then(() => {
                 console.log("Streaming complete");
                 // Additional actions if needed after streaming is complete
               })
