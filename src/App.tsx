@@ -81,26 +81,41 @@ const MyEditor = () => {
     }
   });
 
-  async function addNewThoughtToDatabase(id: string, body: string, agentName: string) {
-    // compute next index as 1.0 + max(index) in thoughts table
-    const { data: maxIndexData, error: maxIndexError } = await supabase
-      .from("thoughts")
-      .select("index")
-      .order("index", { ascending: false })
-      .limit(1);
-    if (maxIndexError) {
-      console.error("Error fetching max(index)", maxIndexError);
-      throw maxIndexError;
+  async function addNewThoughtToDatabase(id: string, body: string, agentName: string, insertAfterIndex?: number) {
+    let computedIndex;
+    if (insertAfterIndex !== undefined) {
+      // get the index of the thought after which we want to insert
+      // and insert the new thought with an index that is the average of the two
+      // truncate the beginning so that the first thought is the one with
+      // index = insertAfterIndex
+      const { data: sortedThoughtsAfterProvidedIndex, error: thoughtError } = await supabase
+        .from("thoughts")
+        .select("index")
+        .eq("agent_name", agentName)
+        .order("index", { ascending: false })
+        .gt("index", insertAfterIndex)
+      if (thoughtError) {
+        console.error("Error fetching thoughts with index greater than insertAfterIndex", thoughtError);
+        throw thoughtError;
+      }
+      computedIndex = (insertAfterIndex + sortedThoughtsAfterProvidedIndex[0].index) / 2;
+    } else {
+      const { data: maxIndexData, error: maxIndexError } = await supabase
+        .from("thoughts")
+        .select("index")
+        .eq("agent_name", agentName)
+        .order("index", { ascending: false })
+        .limit(1);
+      if (maxIndexError) {
+        console.error("Error fetching max(index)", maxIndexError);
+        throw maxIndexError;
+      }
+      computedIndex = maxIndexData ? maxIndexData[0].index + 1.0: 0.0;
     }
-    if (typeof maxIndexData[0].index !== "number") {
-      throw new Error("maxIndexData[0] is not a number");
-    }
-    const maxIndex = maxIndexData ? maxIndexData[0].index + 1.0: 0.0;
-    console.log("maxIndex: ", maxIndex)
     const { data, error } = await supabase
       .from("thoughts")
       .insert([
-        { id: id, index: maxIndex, body: body, agent_name: agentName}
+        { id: id, index: computedIndex, body: body, agent_name: agentName}
       ]);
     if (error) {
       console.error("Error adding new thought to database", error);
