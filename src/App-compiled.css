@@ -564,6 +564,10 @@ video {
   display: flex;
 }
 
+.table {
+  display: table;
+}
+
 .h-\[25px\] {
   height: 25px;
 }

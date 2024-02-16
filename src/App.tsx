@@ -2,8 +2,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { Schema, DOMParser, NodeSpec, MarkSpec } from "prosemirror-model";
 import { EditorState, Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
-
+import supabase from "./supabase";
+import { keymap } from "prosemirror-keymap";
+import { v4 as uuidv4 } from "uuid";
 import { Plugin } from "prosemirror-state";
+
 
 const removeHighlightOnInputPlugin = new Plugin({
   appendTransaction(transactions, oldState, newState) {
@@ -55,20 +58,67 @@ const removeHighlightOnInputPlugin = new Plugin({
 });
 
 const MyEditor = () => {
-  const editorRef = useRef();
-  const [editorView, setEditorView] = useState(null);
+  const editorRef = useRef<HTMLElement>();
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
+
+  const enterKeyPlugin = keymap({
+    "Enter": (state, dispatch) => {
+      // Prevent the default Enter key behavior
+      const { tr } = state;
+      if (dispatch) {
+        const thoughtNode = state.schema.nodes.thought.create({id: uuidv4()});
+        
+        // Insert a new thought node after the current selection
+        const insertPos = tr.selection.$from.end(0); // Adjust this as needed
+        dispatch(tr.insert(insertPos, thoughtNode).scrollIntoView());
+        
+        // Add a new thought to the Supabase database
+        addNewThoughtToDatabase(thoughtNode.attrs.id, "", "gimli");
+
+        return true; // Indicate that the key event was handled
+      }
+      return false;
+    }
+  });
+
+  async function addNewThoughtToDatabase(id: string, body: string, agentName: string) {
+    // compute next index as 1.0 + max(index) in thoughts table
+    const { data: maxIndexData, error: maxIndexError } = await supabase
+      .from("thoughts")
+      .select("index")
+      .order("index", { ascending: false })
+      .limit(1);
+    if (maxIndexError) {
+      console.error("Error fetching max(index)", maxIndexError);
+      throw maxIndexError;
+    }
+    if (typeof maxIndexData[0].index !== "number") {
+      throw new Error("maxIndexData[0] is not a number");
+    }
+    const maxIndex = maxIndexData ? maxIndexData[0].index + 1.0: 0.0;
+    console.log("maxIndex: ", maxIndex)
+    const { data, error } = await supabase
+      .from("thoughts")
+      .insert([
+        { id: id, index: maxIndex, body: body, agent_name: agentName}
+      ]);
+    if (error) {
+      console.error("Error adding new thought to database", error);
+    } else {
+      console.log("Added new thought to database", data);
+    }
+  }
 
   useEffect(() => {
     const schema = new Schema({
       nodes: {
-        doc: { content: "block+" },
-        paragraph: {
+        doc: { content: "thought+" },
+        thought: {
+          attrs: { id: { default: uuidv4() } },
           content: "text*",
-          group: "block",
           toDOM: () => ["p", 0],
         },
         text: {
-          group: "inline",
         },
       },
       marks: {
@@ -80,12 +130,12 @@ const MyEditor = () => {
     });
 
     // Create a document node with initial content "Hi"
-    const initialContent = schema.nodes.doc.create({}, schema.nodes.paragraph.create({}, schema.text("Hi")));
+    const initialContent = schema.nodes.doc.create({}, schema.nodes.thought.create({}, schema.text("Hi")));
 
     const state = EditorState.create({
       doc: initialContent,
       schema,
-      plugins: [removeHighlightOnInputPlugin],
+      plugins: [removeHighlightOnInputPlugin, enterKeyPlugin],
     });
 
     const view = new EditorView(editorRef.current, {
@@ -102,6 +152,10 @@ const MyEditor = () => {
       view.destroy();
     };
   }, []);
+
+  useEffect(() => {
+    console.log("editorView updated: ", editorView)
+  }, [editorView]);
 
   const insertRandomText = () => {
     if (editorView) {
