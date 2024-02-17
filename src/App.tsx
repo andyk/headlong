@@ -1,21 +1,33 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Schema, DOMParser, NodeSpec, MarkSpec } from "prosemirror-model";
+import { Schema, NodeSpec, Node as ProseMirrorNode } from "prosemirror-model";
 import { EditorState, Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import supabase from "./supabase";
 import { keymap } from "prosemirror-keymap";
 import { v4 as uuidv4 } from "uuid";
 import { Plugin } from "prosemirror-state";
+import openai from "./openai";
+import hf from "./huggingface";
+import {
+  ChatCompletionAssistantMessageParam,
+  ChatCompletionSystemMessageParam,
+  ChatCompletionMessageParam,
+} from "openai/resources/chat/completions";
 
 
 const removeHighlightOnInputPlugin = new Plugin({
   appendTransaction(transactions, oldState, newState) {
     let newTransaction: Transaction | null = null;
+    let markAdded = false;
     transactions.forEach((tr) => {
-      console.log("Inside appendTransaction, handling tr");
+      console.log("Inside appendTransaction, handling tr: ", tr);
       if (tr.docChanged) {
         // Loop through each step in the transaction
         tr.steps.forEach((step) => {
+          console.log("step.toJSON().stepType: ", step.toJSON().stepType);
+          if (step.toJSON().stepType === 'addMark') {
+            markAdded = true;
+          }
           console.log("hanlding a tr.step");
           const stepMap = step.getMap();
           // We only care about "addText" steps, which don't exist explicitly.
@@ -48,8 +60,8 @@ const removeHighlightOnInputPlugin = new Plugin({
     });
 
     // Only append transactions if we've actually created any
-    if (newTransaction !== null) {
-      console.log("returning newTransactions: ", newTransaction);
+    if (newTransaction !== null && !markAdded) {
+      console.log("returning newTransaction: ", newTransaction);
       return newTransaction;
     }
     console.log("returning null");
@@ -57,9 +69,85 @@ const removeHighlightOnInputPlugin = new Plugin({
   },
 });
 
-const MyEditor = () => {
+function App() {
   const editorRef = useRef<HTMLElement>();
   const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const [selectedAgentName] = useState<string>("gimli");
+
+  async function gpt4TurboChat(options: {
+    messages: ChatCompletionMessageParam[];
+    max_tokens?: number;
+    temperature?: number;
+    stream?: boolean; // Add stream option
+    onDelta: (delta: any) => void; // Callback to handle incoming data
+  }) {
+    // Assuming the OpenAI SDK has an event emitter or callback mechanism for streaming
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4-1106-preview",
+      messages: options.messages,
+      max_tokens: options.max_tokens ?? 100,
+      temperature: options.temperature ?? 0.5,
+      stream: options.stream ?? true,
+    });
+
+    const stream = completion as AsyncIterable<any>;
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content || "";
+      options.onDelta(delta); // Invoke the callback with the incoming delta
+    }
+
+    return completion;
+  }
+
+  async function huggingFaceChat(options: {
+    messages: ChatCompletionMessageParam[];
+    max_tokens?: number;
+    temperature?: number;
+    stream?: boolean; // Add stream option
+    onDelta: (delta: any) => void; // Callback to handle incoming data
+  }) {
+
+    // Generate prompt accoriding to HF template. 'user' messages aren't handled
+    let prompt = ""
+    for await (const message of options.messages) {
+      switch(message.role) {
+        case 'system':
+          prompt = prompt.concat("<s> [INST] <<SYS>> ", message.content, " </SYS>> [/INST]");
+          break;
+        case 'assistant':
+          prompt = prompt.concat(message.content ?? "", "\n");
+          break;
+        default:
+          console.log("Unknown message type");
+      }
+    }
+    console.log("Prompt:\n", prompt);
+
+    const completion = hf.textGenerationStream({
+      inputs: prompt,
+      parameters: {
+        max_tokens: options.max_tokens ?? 100,
+        temperature: options.temperature ?? 0.5,
+        return_full_text: false,
+        // repetition_penalty: 1,
+      }
+    });
+
+    let reply = "";
+    const stream = completion as AsyncIterable<any>;
+    for await (const chunk of stream) {
+      // console.log(chunk);
+      const delta = chunk.token?.text || "";
+      reply = reply.concat(delta);
+      // Llama always finishes assistant completions with </s>, so it should be the last delta
+      if (delta != "</s>") {
+        options.onDelta(delta); // Invoke the callback with the incoming delta
+      }
+    }
+    console.log("Reply:\n", reply);
+
+    return completion;
+  }
 
   const enterKeyPlugin = keymap({
     "Enter": (state, dispatch) => {
@@ -73,7 +161,7 @@ const MyEditor = () => {
         dispatch(tr.insert(insertPos, thoughtNode).scrollIntoView());
         
         // Add a new thought to the Supabase database
-        addNewThoughtToDatabase(thoughtNode.attrs.id, "", "gimli");
+        addNewThoughtToDatabase(thoughtNode.attrs.id, "", selectedAgentName);
 
         return true; // Indicate that the key event was handled
       }
@@ -172,31 +260,76 @@ const MyEditor = () => {
     console.log("editorView updated: ", editorView)
   }, [editorView]);
 
-  const insertRandomText = () => {
+  function extractThoughtTexts(doc: ProseMirrorNode) {
+    const texts: [string, string][] = []; // id, thought_body
+  
+    // This function recursively walks through the nodes of the document
+    function findTexts(node: ProseMirrorNode) {
+      // Check if the current node is a 'thought' node
+      if (node.type.name === 'thought') {
+        // If it is, extract its text content and add it to the texts array
+        texts.push([node.attrs.id, node.textContent]);
+      }
+      // Recursively walk through the child nodes
+      node.forEach(findTexts);
+    }
+  
+    // Start the recursive search from the top-level document node
+    findTexts(doc);
+  
+    return texts;
+  }
+
+  const insertTextAtCursor = (text: string) => {
     if (editorView) {
-      const text = "Random " + Math.random().toString(36).substring(2);
       const { tr } = editorView.state;
       const highlightMark = editorView.state.schema.marks.highlight.create();
       if (!tr.selection.empty) tr.deleteSelection();
       const position = tr.selection.from; // Insert position
-      const textNode = editorView.state.schema.text(text, [highlightMark]);
+      const textNode = editorView.state.schema.text(text);
       tr.insert(position, textNode);
+      const endPosition = position + text.length;
+      tr.addMark(position, endPosition, highlightMark);
       editorView.dispatch(tr);
     }
   };
 
-  return (
-    <div>
-      <button onClick={insertRandomText}>Insert Random Text</button>
-      <div style={{ width: "100%", border: "solid 1px black" }} ref={editorRef}></div>
-    </div>
-  );
-};
+  const generateThoughtUsingGPT4 = () => {
+    // Get list of thought texts from the editor
+    if (editorView === null) {
+      return;
+    }
+    const thoughts = extractThoughtTexts(editorView.state.doc)
+    console.log("thoughts: ", thoughts)
+    // use editorView to get the thought id of the current selection
+    const currThoughtId = editorView?.state.selection.$head.parent.attrs.id;
+    // create a new list from `thoughts` that only has thoughts up to and including
+    // the thought with currThoughtId
+    const thoughtsAfterCurr = thoughts.slice(0, thoughts.findIndex(([id, _]) => id === currThoughtId) + 1); 
+    const sysMessage: ChatCompletionSystemMessageParam = {
+      role: "system",
+      content: "Come up with the next thought based on the following stream of thoughts",
+    };
+    const assistantMessages: ChatCompletionAssistantMessageParam[] = thoughtsAfterCurr.map(([id, body]) => {
+      return { role: "assistant", content: body };
+    });
+    const messages = [sysMessage, ...assistantMessages];
+    console.log("messages: ", messages);
+    gpt4TurboChat({
+      messages: messages,
+      stream: true,
+      onDelta: (delta) => {
+        if (delta) {
+          insertTextAtCursor(delta);
+        }
+      },
+    })
+  }
 
-function App() {
   return (
     <div className="App">
-      <MyEditor />
+      <div style={{ width: "100%", border: "solid 1px black" }} ref={editorRef}></div>
+      <button onClick={generateThoughtUsingGPT4}>Generate</button>
     </div>
   );
 }
