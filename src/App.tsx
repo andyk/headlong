@@ -2,10 +2,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { Schema, NodeSpec, Node as ProseMirrorNode } from "prosemirror-model";
 import { EditorState, Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
-import supabase from "./supabase";
+import { joinBackward } from "prosemirror-commands";
 import { keymap } from "prosemirror-keymap";
+import { Plugin, TextSelection } from "prosemirror-state";
+import supabase from "./supabase";
 import { v4 as uuidv4 } from "uuid";
-import { Plugin } from "prosemirror-state";
 import openai from "./openai";
 import hf from "./huggingface";
 import {
@@ -151,21 +152,59 @@ function App() {
 
   const enterKeyPlugin = keymap({
     "Enter": (state, dispatch) => {
-      // Prevent the default Enter key behavior
-      const { tr } = state;
-      if (dispatch) {
-        const thoughtNode = state.schema.nodes.thought.create({id: uuidv4()});
+      if (dispatch && state.selection.empty) {
+        const { tr } = state;
+        const thoughtNode = state.schema.nodes.thought.create({ id: uuidv4() });
         
-        // Insert a new thought node after the current selection
-        const insertPos = tr.selection.$from.end(0); // Adjust this as needed
-        dispatch(tr.insert(insertPos, thoughtNode).scrollIntoView());
+        if (!tr.selection.empty) tr.deleteSelection();
+        const position = tr.selection.from; // Insert position
+  
+        // Adjust the insertion position to after the current node
+        const insertPos = tr.doc.resolve(position).after(1);
+  
+        // Insert the new thought node and move the selection
+        const newTr = tr.insert(insertPos, thoughtNode);
+  
+        // Calculate the position for the new selection
+        // It should be within the newly inserted thought node, accounting for its start position
+        const newPos = insertPos + 1; // Position inside the new thought node
         
+        // Update the transaction with the new selection
+        newTr.setSelection(TextSelection.create(newTr.doc, newPos));
+        
+        // Dispatch the updated transaction
+        dispatch(newTr);
+
         // Add a new thought to the Supabase database
         addNewThoughtToDatabase(thoughtNode.attrs.id, "", selectedAgentName);
-
-        return true; // Indicate that the key event was handled
+        
+        return true;
       }
       return false;
+    }
+  });
+
+  const backspaceKeyPlugin = keymap({
+    "Backspace": (state, dispatch) => {
+      // Use the joinBackward command directly
+      // It returns true if it performed an action, false otherwise
+      const jbRes = joinBackward(state, dispatch);
+      // Remove the thought that is being deleted from the Supabase database
+      if (jbRes) {
+        const thoughtId = state.selection.$head.parent.attrs.id;
+        supabase
+          .from("thoughts")
+          .delete()
+          .eq("id", thoughtId)
+          .then(({ data, error }) => {
+            if (error) {
+              console.error("Error deleting thought from database", error);
+            } else {
+              console.log(`Deleted thought with id ${thoughtId} from database`, data);
+            }
+          });
+      }
+      return jbRes;
     }
   });
 
@@ -238,7 +277,7 @@ function App() {
     const state = EditorState.create({
       doc: initialContent,
       schema,
-      plugins: [removeHighlightOnInputPlugin, enterKeyPlugin],
+      plugins: [removeHighlightOnInputPlugin, enterKeyPlugin, backspaceKeyPlugin],
     });
 
     const view = new EditorView(editorRef.current, {
