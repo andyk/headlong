@@ -482,8 +482,6 @@ function App() {
     modelSelection === "GPT4" ? gpt4TurboChat(chatArgs) : huggingFaceChat(chatArgs);
   };
 
-  console.log(import.meta.env.HF_API_KEY, import.meta.env.HF_LLAMA_ENDPOINT);
-
   return (
     <div className="App">
       <div className="border border-solid border-slate-100 w-full p-1" ref={editorRef}></div>

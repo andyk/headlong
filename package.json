@@ -15,6 +15,8 @@
     "draft-js": "^0.11.7",
     "lodash": "^4.17.21",
     "openai": "^4.27.0",
+    "prosemirror-commands": "^1.5.2",
+    "prosemirror-keymap": "^1.2.2",
     "prosemirror-model": "^1.19.4",
     "prosemirror-schema-basic": "^1.2.2",
     "prosemirror-state": "^1.4.3",
