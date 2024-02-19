@@ -8,7 +8,6 @@ import {
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
 //import { Editor, EditorState, ContentState, getDefaultKeyBinding, KeyBindingUtil } from "draft-js";
-import type { RemirrorJSON } from 'remirror';
 import { OnChangeJSON } from '@remirror/react';
 import { WysiwygEditor } from '@remirror/react-editors/wysiwyg';
 

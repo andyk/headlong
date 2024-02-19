@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import "./App-compiled.css";
-import { Schema, Node as ProseMirrorNode, ResolvedPos } from "prosemirror-model";
+import { Schema, Node as ProseMirrorNode } from "prosemirror-model";
 import { EditorState, Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { joinBackward } from "prosemirror-commands";
@@ -81,6 +81,7 @@ function App() {
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [loading, setLoading] = useState(true);
   const [modelSelection, setModelSelection] = useState("GPT4");
+  const [modelTemperature, setModelTemperature] = useState(0.5);
 
   async function gpt4TurboChat(options: {
     messages: ChatCompletionMessageParam[];
@@ -133,7 +134,7 @@ function App() {
     const completion = hf.textGenerationStream({
       inputs: prompt,
       parameters: {
-        max_tokens: options.max_tokens ?? 100,
+        max_new_tokens: options.max_tokens ?? 100,
         temperature: options.temperature ?? 0.5,
         return_full_text: false,
         // repetition_penalty: 1,
@@ -470,6 +471,7 @@ function App() {
     console.log("messages: ", messages);
     const chatArgs = {
       messages: messages,
+      temperature: modelTemperature,
       stream: true,
       onDelta: (delta) => {
         if (delta) {
@@ -485,17 +487,36 @@ function App() {
   return (
     <div className="App">
       <div className="border border-solid border-slate-100 w-full p-1" ref={editorRef}></div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", marginBottom: "20px" }}>
-        <button className="bg-blue-500 pl-2 pr-2" onClick={generateThought}>Generate</button>
-        {import.meta.env.HF_API_KEY && import.meta.env.HF_LLAMA_ENDPOINT ? (
-          <div className="p-1">
-            <label htmlFor="modelSelection">Model: </label>
-            <select id="modelSelection" value={modelSelection} onChange={(e) => setModelSelection(e.target.value)}>
-              <option value="GPT4">GPT4</option>
-              <option value="Headlong 7B">Headlong 7B</option>
-            </select>
-          </div>
-        ) : null}
+      <div className="flex mt-2">
+        <button className="bg-blue-500 pl-2 pr-2" onClick={generateThought}>
+          Generate
+        </button>
+        <div className="pt-3">
+          {import.meta.env.HF_API_KEY && import.meta.env.HF_LLAMA_ENDPOINT ? (
+            <>
+              <label className="ml-3" htmlFor="modelSelection">Model: </label>
+              <select 
+                id="modelSelection"
+                value={modelSelection}
+                onChange={(e) => setModelSelection(e.target.value)}
+              >
+                <option value="GPT4">GPT4</option>
+                <option value="Headlong 7B">Headlong 7B</option>
+              </select>
+            </>
+          ) : null}
+          <label className="ml-3" htmlFor="modelTemperature">Temperature: </label>
+          <input
+            className="w-14"
+            type="number"
+            step="0.1"
+            max="1.0"
+            min="0.0"
+            id="modelTemperature"
+            value={modelTemperature}
+            onChange={(e) => setModelTemperature(parseFloat(e.target.value))}
+          />
+        </div>
       </div>
     </div>
   );
