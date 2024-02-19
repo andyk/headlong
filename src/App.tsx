@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Schema, NodeSpec, Node as ProseMirrorNode } from "prosemirror-model";
+import { Schema, Node as ProseMirrorNode, ResolvedPos } from "prosemirror-model";
 import { EditorState, Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { joinBackward } from "prosemirror-commands";
@@ -14,7 +14,10 @@ import {
   ChatCompletionSystemMessageParam,
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
+import { debounce } from "lodash";
+import { Database } from "./database.types";
 
+type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
 
 const removeHighlightOnInputPlugin = new Plugin({
   appendTransaction(transactions, oldState, newState) {
@@ -26,10 +29,10 @@ const removeHighlightOnInputPlugin = new Plugin({
         // Loop through each step in the transaction
         tr.steps.forEach((step) => {
           console.log("step.toJSON().stepType: ", step.toJSON().stepType);
-          if (step.toJSON().stepType === 'addMark') {
+          if (step.toJSON().stepType === "addMark") {
             markAdded = true;
           }
-          console.log("hanlding a tr.step");
+          console.log("handling a tr.step");
           const stepMap = step.getMap();
           // We only care about "addText" steps, which don't exist explicitly.
           // ProseMirror uses "replace" steps with content for adding text.
@@ -50,7 +53,7 @@ const removeHighlightOnInputPlugin = new Plugin({
               console.log("Removing highlight from", from, to);
               const mark = newState.schema.marks.highlight;
               if (newTransaction === null) {
-                newTransaction = newState.tr.removeMark(from-1, to, mark);
+                newTransaction = newState.tr.removeMark(from - 1, to, mark);
               } else {
                 newTransaction.removeMark(from, to, newState.schema.marks.highlight);
               }
@@ -72,8 +75,10 @@ const removeHighlightOnInputPlugin = new Plugin({
 
 function App() {
   const editorRef = useRef<HTMLElement>();
-  const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
   const [selectedAgentName] = useState<string>("gimli");
+  const [thoughts, setThoughts] = useState<Thought[]>([]);
+  const [loading, setLoading] = useState(true);
 
   async function gpt4TurboChat(options: {
     messages: ChatCompletionMessageParam[];
@@ -107,15 +112,14 @@ function App() {
     stream?: boolean; // Add stream option
     onDelta: (delta: any) => void; // Callback to handle incoming data
   }) {
-
     // Generate prompt accoriding to HF template. 'user' messages aren't handled
-    let prompt = ""
+    let prompt = "";
     for await (const message of options.messages) {
-      switch(message.role) {
-        case 'system':
+      switch (message.role) {
+        case "system":
           prompt = prompt.concat("<s> [INST] <<SYS>> ", message.content, " </SYS>> [/INST]");
           break;
-        case 'assistant':
+        case "assistant":
           prompt = prompt.concat(message.content ?? "", "\n");
           break;
         default:
@@ -131,7 +135,7 @@ function App() {
         temperature: options.temperature ?? 0.5,
         return_full_text: false,
         // repetition_penalty: 1,
-      }
+      },
     });
 
     let reply = "";
@@ -151,41 +155,67 @@ function App() {
   }
 
   const enterKeyPlugin = keymap({
-    "Enter": (state, dispatch) => {
+    Enter: (state, dispatch) => {
       if (dispatch && state.selection.empty) {
         const { tr } = state;
-        const thoughtNode = state.schema.nodes.thought.create({ id: uuidv4() });
-        
+        // get the current thought id
+        const currentThoughtIndex: number = state.selection.$head.parent.attrs.index;
+        let nextThoughtIndex: number | null = null;
+
+        state.doc.descendants((node, pos) => {
+          console.log("Looking at node: ", node.attrs.index, node.attrs.id, pos)
+          if (node.type.name === "thought" && node.attrs.index > currentThoughtIndex) {
+            if (nextThoughtIndex === null || node.attrs.index < nextThoughtIndex) {
+              nextThoughtIndex = node.attrs.index;
+            }
+          }
+        });
+        console.log("currentThoughtIndex: ", currentThoughtIndex);
+        console.log("nextThoughtIndex: ", nextThoughtIndex);
+        const newThoughtIndex = nextThoughtIndex
+          ? (currentThoughtIndex + nextThoughtIndex) / 2.0
+          : currentThoughtIndex + 1.0;
+        const thoughtNode = state.schema.nodes.thought.create({ id: uuidv4(), index: newThoughtIndex });
+
         if (!tr.selection.empty) tr.deleteSelection();
         const position = tr.selection.from; // Insert position
-  
+
         // Adjust the insertion position to after the current node
         const insertPos = tr.doc.resolve(position).after(1);
-  
+
         // Insert the new thought node and move the selection
         const newTr = tr.insert(insertPos, thoughtNode);
-  
+
         // Calculate the position for the new selection
         // It should be within the newly inserted thought node, accounting for its start position
         const newPos = insertPos + 1; // Position inside the new thought node
-        
+
         // Update the transaction with the new selection
         newTr.setSelection(TextSelection.create(newTr.doc, newPos));
-        
+
         // Dispatch the updated transaction
         dispatch(newTr);
 
+        // TODO: FIX ME
+        // Not using database calls to compute next index because those are async and we need the index now
+        // This might lead to issues with concurrent insertions of thoughts causing conflicts
+        //(async () => {
+        //  const computedIndex = await computeIndex(selectedAgentName, currentThoughtIndex);
+        //  // Add a new thought to the Supabase database
+        //  addNewThoughtToDatabase(thoughtNode.attrs.id, "", selectedAgentName, computedIndex);
+        //})();
+
         // Add a new thought to the Supabase database
-        addNewThoughtToDatabase(thoughtNode.attrs.id, "", selectedAgentName);
-        
+        addNewThoughtToDatabase(thoughtNode.attrs.id, "", selectedAgentName, newThoughtIndex);
+
         return true;
       }
       return false;
-    }
+    },
   });
 
   const backspaceKeyPlugin = keymap({
-    "Backspace": (state, dispatch) => {
+    Backspace: (state, dispatch) => {
       // Use the joinBackward command directly
       // It returns true if it performed an action, false otherwise
       const jbRes = joinBackward(state, dispatch);
@@ -205,12 +235,12 @@ function App() {
           });
       }
       return jbRes;
-    }
+    },
   });
 
-  async function addNewThoughtToDatabase(id: string, body: string, agentName: string, insertAfterIndex?: number) {
-    let computedIndex;
+  async function computeIndex(agentName: string, insertAfterIndex?: number) {
     if (insertAfterIndex !== undefined) {
+      console.log("computijng index for insertAfterIndex: ", insertAfterIndex);
       // get the index of the thought after which we want to insert
       // and insert the new thought with an index that is the average of the two
       // truncate the beginning so that the first thought is the one with
@@ -219,31 +249,38 @@ function App() {
         .from("thoughts")
         .select("index")
         .eq("agent_name", agentName)
-        .order("index", { ascending: false })
+        .order("index", { ascending: true })
         .gt("index", insertAfterIndex)
+        .limit(1)
+        .maybeSingle();
       if (thoughtError) {
         console.error("Error fetching thoughts with index greater than insertAfterIndex", thoughtError);
         throw thoughtError;
       }
-      computedIndex = (insertAfterIndex + sortedThoughtsAfterProvidedIndex[0].index) / 2;
+      if (sortedThoughtsAfterProvidedIndex === null) {
+        return insertAfterIndex + 1.0;
+      } else {
+        return (insertAfterIndex + sortedThoughtsAfterProvidedIndex.index) / 2;
+      }
     } else {
-      const { data: maxIndexData, error: maxIndexError } = await supabase
+      const { data: maxCurrIndexData, error: maxIndexError } = await supabase
         .from("thoughts")
         .select("index")
         .eq("agent_name", agentName)
-        .order("index", { ascending: false })
+        .order("index", { ascending: true })
         .limit(1);
       if (maxIndexError) {
         console.error("Error fetching max(index)", maxIndexError);
         throw maxIndexError;
       }
-      computedIndex = maxIndexData ? maxIndexData[0].index + 1.0: 0.0;
+      return maxCurrIndexData ? maxCurrIndexData[0].index + 1.0 : 0.0;
     }
+  }
+
+  async function addNewThoughtToDatabase(id: string, body: string, agentName: string, index: number) {
     const { data, error } = await supabase
       .from("thoughts")
-      .insert([
-        { id: id, index: computedIndex, body: body, agent_name: agentName}
-      ]);
+      .insert([{ id: id, index: index, body: body, agent_name: agentName }]);
     if (error) {
       console.error("Error adding new thought to database", error);
     } else {
@@ -251,17 +288,49 @@ function App() {
     }
   }
 
+  const updateThoughtInDatabase = debounce(async (id: string, body: string) => {
+    const { error } = await supabase.from("thoughts").update({ body }).eq("id", id);
+
+    if (error) {
+      console.error("Error updating thought:", error);
+    } else {
+      console.log(`Thought ${id} updated successfully.`);
+    }
+  }, 1000); // Debounce for 1 second
+
   useEffect(() => {
+    const fetchThoughts = async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("thoughts")
+        .select("*")
+        .order("index", { ascending: true })
+        .eq("agent_name", selectedAgentName);
+
+      if (error) {
+        console.error("Error fetching thoughts:", error);
+        setLoading(false);
+      } else {
+        setThoughts(data || []);
+        setLoading(false);
+      }
+    };
+
+    fetchThoughts();
+  }, [selectedAgentName]);
+
+  useEffect(() => {
+    if (!editorRef.current || loading) return; // Wait until thoughts are loaded
+
     const schema = new Schema({
       nodes: {
         doc: { content: "thought+" },
         thought: {
-          attrs: { id: { default: uuidv4() } },
+          attrs: { id: { default: uuidv4() }, index: { default: 0 } },
           content: "text*",
           toDOM: () => ["p", 0],
         },
-        text: {
-        },
+        text: {},
       },
       marks: {
         highlight: {
@@ -271,8 +340,22 @@ function App() {
       },
     });
 
-    // Create a document node with initial content "Hi"
-    const initialContent = schema.nodes.doc.create({}, schema.nodes.thought.create({}, schema.text("Hi")));
+    // Construct the initial document content
+    const initialDocContent = thoughts.map((thought) => {
+      const thoughtAttrs = {
+        id: thought.id,
+        index: thought.index,
+        created_at: thought.created_at,
+        processed_at: thought.processed_at,
+      };
+      if (thought.body) {
+        return schema.nodes.thought.create(thoughtAttrs, schema.text(thought.body));
+      } else {
+        return schema.nodes.thought.create(thoughtAttrs);
+      }
+    });
+    console.log("initialDocContent: ", initialDocContent);
+    const initialContent = schema.nodes.doc.create({}, initialDocContent);
 
     const state = EditorState.create({
       doc: initialContent,
@@ -283,68 +366,97 @@ function App() {
     const view = new EditorView(editorRef.current, {
       state,
       dispatchTransaction(transaction) {
-        const newState = view.state.apply(transaction);
-        view.updateState(newState);
+        if (editorViewRef.current === null) {
+          return;
+        }
+        const newState = editorViewRef.current.state.apply(transaction);
+        editorViewRef.current.updateState(newState);
+
+        // Only proceed if the document has changed
+        if (!transaction.docChanged) return;
+
+        const { from, to } = newState.selection;
+        let currentThoughtId = null;
+        newState.doc.nodesBetween(from, to, (node, pos) => {
+          if (node.type.name === "thought") {
+            currentThoughtId = node.attrs.id; // Assuming each thought node has a unique ID
+            return false; // Stop iterating once the first thought node is found
+          }
+        });
+
+        if (currentThoughtId) {
+          const thoughtText = extractThoughtTextFromPosition(newState.doc, from);
+          updateThoughtInDatabase(currentThoughtId, thoughtText);
+        }
       },
     });
 
-    setEditorView(view);
+    editorViewRef.current = view;
 
     return () => {
-      view.destroy();
+      if (editorViewRef.current) {
+        editorViewRef.current.destroy();
+      }
     };
-  }, []);
+  }, [loading]);
 
-  useEffect(() => {
-    console.log("editorView updated: ", editorView)
-  }, [editorView]);
+  function extractThoughtTextFromPosition(doc: ProseMirrorNode, pos: number): string {
+    let textContent = "";
+    doc.nodesBetween(pos, pos, (node) => {
+      if (node.type.name === "thought") {
+        textContent = node.textContent;
+        return false; // Stop iterating once the first thought node is found
+      }
+    });
+    return textContent;
+  }
 
   function extractThoughtTexts(doc: ProseMirrorNode) {
     const texts: [string, string][] = []; // id, thought_body
-  
+
     // This function recursively walks through the nodes of the document
     function findTexts(node: ProseMirrorNode) {
       // Check if the current node is a 'thought' node
-      if (node.type.name === 'thought') {
+      if (node.type.name === "thought") {
         // If it is, extract its text content and add it to the texts array
         texts.push([node.attrs.id, node.textContent]);
       }
       // Recursively walk through the child nodes
       node.forEach(findTexts);
     }
-  
+
     // Start the recursive search from the top-level document node
     findTexts(doc);
-  
+
     return texts;
   }
 
   const insertTextAtCursor = (text: string) => {
-    if (editorView) {
-      const { tr } = editorView.state;
-      const highlightMark = editorView.state.schema.marks.highlight.create();
+    if (editorViewRef.current) {
+      const { tr } = editorViewRef.current.state;
+      const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
       if (!tr.selection.empty) tr.deleteSelection();
       const position = tr.selection.from; // Insert position
-      const textNode = editorView.state.schema.text(text);
+      const textNode = editorViewRef.current.state.schema.text(text);
       tr.insert(position, textNode);
       const endPosition = position + text.length;
       tr.addMark(position, endPosition, highlightMark);
-      editorView.dispatch(tr);
+      editorViewRef.current.dispatch(tr);
     }
   };
 
   const generateThoughtUsingGPT4 = () => {
     // Get list of thought texts from the editor
-    if (editorView === null) {
+    if (editorViewRef.current === null) {
       return;
     }
-    const thoughts = extractThoughtTexts(editorView.state.doc)
-    console.log("thoughts: ", thoughts)
+    const thoughts = extractThoughtTexts(editorViewRef.current.state.doc);
+    console.log("thoughts: ", thoughts);
     // use editorView to get the thought id of the current selection
-    const currThoughtId = editorView?.state.selection.$head.parent.attrs.id;
+    const currThoughtId = editorViewRef.current?.state.selection.$head.parent.attrs.id;
     // create a new list from `thoughts` that only has thoughts up to and including
     // the thought with currThoughtId
-    const thoughtsAfterCurr = thoughts.slice(0, thoughts.findIndex(([id, _]) => id === currThoughtId) + 1); 
+    const thoughtsAfterCurr = thoughts.slice(0, thoughts.findIndex(([id, _]) => id === currThoughtId) + 1);
     const sysMessage: ChatCompletionSystemMessageParam = {
       role: "system",
       content: "Come up with the next thought based on the following stream of thoughts",
@@ -362,8 +474,8 @@ function App() {
           insertTextAtCursor(delta);
         }
       },
-    })
-  }
+    });
+  };
 
   return (
     <div className="App">
