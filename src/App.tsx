@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import "./App-compiled.css";
 import { Schema, Node as ProseMirrorNode, ResolvedPos } from "prosemirror-model";
 import { EditorState, Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
@@ -79,6 +80,7 @@ function App() {
   const [selectedAgentName] = useState<string>("gimli");
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [loading, setLoading] = useState(true);
+  const [modelSelection, setModelSelection] = useState("GPT4");
 
   async function gpt4TurboChat(options: {
     messages: ChatCompletionMessageParam[];
@@ -163,7 +165,7 @@ function App() {
         let nextThoughtIndex: number | null = null;
 
         state.doc.descendants((node, pos) => {
-          console.log("Looking at node: ", node.attrs.index, node.attrs.id, pos)
+          console.log("Looking at node: ", node.attrs.index, node.attrs.id, pos);
           if (node.type.name === "thought" && node.attrs.index > currentThoughtIndex) {
             if (nextThoughtIndex === null || node.attrs.index < nextThoughtIndex) {
               nextThoughtIndex = node.attrs.index;
@@ -238,44 +240,44 @@ function App() {
     },
   });
 
-  async function computeIndex(agentName: string, insertAfterIndex?: number) {
-    if (insertAfterIndex !== undefined) {
-      console.log("computijng index for insertAfterIndex: ", insertAfterIndex);
-      // get the index of the thought after which we want to insert
-      // and insert the new thought with an index that is the average of the two
-      // truncate the beginning so that the first thought is the one with
-      // index = insertAfterIndex
-      const { data: sortedThoughtsAfterProvidedIndex, error: thoughtError } = await supabase
-        .from("thoughts")
-        .select("index")
-        .eq("agent_name", agentName)
-        .order("index", { ascending: true })
-        .gt("index", insertAfterIndex)
-        .limit(1)
-        .maybeSingle();
-      if (thoughtError) {
-        console.error("Error fetching thoughts with index greater than insertAfterIndex", thoughtError);
-        throw thoughtError;
-      }
-      if (sortedThoughtsAfterProvidedIndex === null) {
-        return insertAfterIndex + 1.0;
-      } else {
-        return (insertAfterIndex + sortedThoughtsAfterProvidedIndex.index) / 2;
-      }
-    } else {
-      const { data: maxCurrIndexData, error: maxIndexError } = await supabase
-        .from("thoughts")
-        .select("index")
-        .eq("agent_name", agentName)
-        .order("index", { ascending: true })
-        .limit(1);
-      if (maxIndexError) {
-        console.error("Error fetching max(index)", maxIndexError);
-        throw maxIndexError;
-      }
-      return maxCurrIndexData ? maxCurrIndexData[0].index + 1.0 : 0.0;
-    }
-  }
+  //async function computeIndex(agentName: string, insertAfterIndex?: number) {
+  //  if (insertAfterIndex !== undefined) {
+  //    console.log("computijng index for insertAfterIndex: ", insertAfterIndex);
+  //    // get the index of the thought after which we want to insert
+  //    // and insert the new thought with an index that is the average of the two
+  //    // truncate the beginning so that the first thought is the one with
+  //    // index = insertAfterIndex
+  //    const { data: sortedThoughtsAfterProvidedIndex, error: thoughtError } = await supabase
+  //      .from("thoughts")
+  //      .select("index")
+  //      .eq("agent_name", agentName)
+  //      .order("index", { ascending: true })
+  //      .gt("index", insertAfterIndex)
+  //      .limit(1)
+  //      .maybeSingle();
+  //    if (thoughtError) {
+  //      console.error("Error fetching thoughts with index greater than insertAfterIndex", thoughtError);
+  //      throw thoughtError;
+  //    }
+  //    if (sortedThoughtsAfterProvidedIndex === null) {
+  //      return insertAfterIndex + 1.0;
+  //    } else {
+  //      return (insertAfterIndex + sortedThoughtsAfterProvidedIndex.index) / 2;
+  //    }
+  //  } else {
+  //    const { data: maxCurrIndexData, error: maxIndexError } = await supabase
+  //      .from("thoughts")
+  //      .select("index")
+  //      .eq("agent_name", agentName)
+  //      .order("index", { ascending: true })
+  //      .limit(1);
+  //    if (maxIndexError) {
+  //      console.error("Error fetching max(index)", maxIndexError);
+  //      throw maxIndexError;
+  //    }
+  //    return maxCurrIndexData ? maxCurrIndexData[0].index + 1.0 : 0.0;
+  //  }
+  //}
 
   async function addNewThoughtToDatabase(id: string, body: string, agentName: string, index: number) {
     const { data, error } = await supabase
@@ -445,7 +447,7 @@ function App() {
     }
   };
 
-  const generateThoughtUsingGPT4 = () => {
+  const generateThought = () => {
     // Get list of thought texts from the editor
     if (editorViewRef.current === null) {
       return;
@@ -466,7 +468,7 @@ function App() {
     });
     const messages = [sysMessage, ...assistantMessages];
     console.log("messages: ", messages);
-    gpt4TurboChat({
+    const chatArgs = {
       messages: messages,
       stream: true,
       onDelta: (delta) => {
@@ -474,13 +476,27 @@ function App() {
           insertTextAtCursor(delta);
         }
       },
-    });
+    };
+    modelSelection === "GPT4" ? gpt4TurboChat(chatArgs) : huggingFaceChat(chatArgs);
   };
+
+  console.log(import.meta.env.HF_API_KEY, import.meta.env.HF_LLAMA_ENDPOINT);
 
   return (
     <div className="App">
-      <div style={{ width: "100%", border: "solid 1px black" }} ref={editorRef}></div>
-      <button onClick={generateThoughtUsingGPT4}>Generate</button>
+      <div className="border border-solid border-slate-100 w-full p-1" ref={editorRef}></div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-start", marginBottom: "20px" }}>
+        <button className="bg-blue-500 pl-2 pr-2" onClick={generateThought}>Generate</button>
+        {import.meta.env.HF_API_KEY && import.meta.env.HF_LLAMA_ENDPOINT ? (
+          <div className="p-1">
+            <label htmlFor="modelSelection">Model: </label>
+            <select id="modelSelection" value={modelSelection} onChange={(e) => setModelSelection(e.target.value)}>
+              <option value="GPT4">GPT4</option>
+              <option value="Headlong 7B">Headlong 7B</option>
+            </select>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
