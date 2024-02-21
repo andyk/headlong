@@ -544,94 +544,82 @@ video {
   --tw-backdrop-sepia:  ;
 }
 
-.m-1 {
-  margin: 0.25rem;
+.ml-3 {
+  margin-left: 0.75rem;
 }
 
-.m-2 {
-  margin: 0.5rem;
-}
-
-.block {
-  display: block;
-}
-
-.inline {
-  display: inline;
+.mt-2 {
+  margin-top: 0.5rem;
 }
 
 .flex {
   display: flex;
 }
 
-.table {
-  display: table;
-}
-
-.h-\[25px\] {
-  height: 25px;
+.w-14 {
+  width: 3.5rem;
 }
 
 .w-full {
   width: 100%;
 }
 
-.cursor-pointer {
-  cursor: pointer;
-}
-
-.flex-col {
-  flex-direction: column;
-}
-
-.overflow-auto {
-  overflow: auto;
-}
-
-.rounded-sm {
-  border-radius: 0.125rem;
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .border {
   border-width: 1px;
 }
 
-.border-blue-600 {
+.border-solid {
+  border-style: solid;
+}
+
+.border-slate-100 {
   --tw-border-opacity: 1;
-  border-color: rgb(37 99 235 / var(--tw-border-opacity));
+  border-color: rgb(241 245 249 / var(--tw-border-opacity));
 }
 
-.border-gray-600 {
-  --tw-border-opacity: 1;
-  border-color: rgb(75 85 99 / var(--tw-border-opacity));
-}
-
-.bg-\[\#121212\] {
+.bg-blue-500 {
   --tw-bg-opacity: 1;
-  background-color: rgb(18 18 18 / var(--tw-bg-opacity));
+  background-color: rgb(59 130 246 / var(--tw-bg-opacity));
 }
 
-.bg-blue-950 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(23 37 84 / var(--tw-bg-opacity));
+.p-1 {
+  padding: 0.25rem;
 }
 
-.bg-zinc-800 {
-  --tw-bg-opacity: 1;
-  background-color: rgb(39 39 42 / var(--tw-bg-opacity));
-}
-
-.px-2 {
+.pl-2 {
   padding-left: 0.5rem;
+}
+
+.pr-2 {
   padding-right: 0.5rem;
 }
 
-.pb-2 {
-  padding-bottom: 0.5rem;
+.pt-3 {
+  padding-top: 0.75rem;
 }
 
-.italic {
-  font-style: italic;
+.text-right {
+  text-align: right;
+}
+
+.text-green-500 {
+  --tw-text-opacity: 1;
+  color: rgb(34 197 94 / var(--tw-text-opacity));
+}
+
+.text-red-500 {
+  --tw-text-opacity: 1;
+  color: rgb(239 68 68 / var(--tw-text-opacity));
+}
+
+.filter {
+  filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
 }
 
 #root {
