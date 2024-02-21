@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import "./App-compiled.css";
 import { Schema, Node as ProseMirrorNode } from "prosemirror-model";
 import { EditorState, Transaction } from "prosemirror-state";
@@ -15,8 +15,9 @@ import {
   ChatCompletionSystemMessageParam,
   ChatCompletionMessageParam,
 } from "openai/resources/chat/completions";
-import { debounce } from "lodash";
+import { throttle } from "lodash";
 import { Database } from "./database.types";
+import "prosemirror-view/style/prosemirror.css";
 
 type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
 
@@ -29,11 +30,9 @@ const removeHighlightOnInputPlugin = new Plugin({
       if (tr.docChanged) {
         // Loop through each step in the transaction
         tr.steps.forEach((step) => {
-          console.log("step.toJSON().stepType: ", step.toJSON().stepType);
           if (step.toJSON().stepType === "addMark") {
             markAdded = true;
           }
-          console.log("handling a tr.step");
           const stepMap = step.getMap();
           // We only care about "addText" steps, which don't exist explicitly.
           // ProseMirror uses "replace" steps with content for adding text.
@@ -66,10 +65,8 @@ const removeHighlightOnInputPlugin = new Plugin({
 
     // Only append transactions if we've actually created any
     if (newTransaction !== null && !markAdded) {
-      console.log("returning newTransaction: ", newTransaction);
       return newTransaction;
     }
-    console.log("returning null");
     return null;
   },
 });
@@ -82,6 +79,8 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [modelSelection, setModelSelection] = useState("GPT4");
   const [modelTemperature, setModelTemperature] = useState(0.5);
+  const [envStatus, setEnvStatus] = useState("detached");
+  const [thoughtsIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
 
   async function gpt4TurboChat(options: {
     messages: ChatCompletionMessageParam[];
@@ -166,19 +165,40 @@ function App() {
         let nextThoughtIndex: number | null = null;
 
         state.doc.descendants((node, pos) => {
-          console.log("Looking at node: ", node.attrs.index, node.attrs.id, pos);
           if (node.type.name === "thought" && node.attrs.index > currentThoughtIndex) {
             if (nextThoughtIndex === null || node.attrs.index < nextThoughtIndex) {
               nextThoughtIndex = node.attrs.index;
             }
           }
         });
-        console.log("currentThoughtIndex: ", currentThoughtIndex);
-        console.log("nextThoughtIndex: ", nextThoughtIndex);
         const newThoughtIndex = nextThoughtIndex
           ? (currentThoughtIndex + nextThoughtIndex) / 2.0
           : currentThoughtIndex + 1.0;
-        const thoughtNode = state.schema.nodes.thought.create({ id: uuidv4(), index: newThoughtIndex });
+
+        const thoughtNode = state.schema.nodes.thought.create({
+          id: uuidv4(),
+          index: newThoughtIndex,
+          metadata: { needs_handling: false },
+        });
+        // if the current though is the last one, then update
+        // it's metadata.needs_handling to be true
+        const currentThoughtPos = state.selection.$head.before();
+        const currentThoughtNode = state.doc.nodeAt(currentThoughtPos);
+        const isLastThought = currentThoughtPos + currentThoughtNode.nodeSize === state.doc.content.size;
+
+        // Perform the necessary updates
+        if (isLastThought) {
+          console.log("Updating metadata.needs_handling for the last thought");
+          tr.setNodeAttribute(currentThoughtPos, "metadata", { needs_handling: true } );
+          setThoughtIdsToUpdate((prev) => {
+            return new Set(prev).add(currentThoughtNode.attrs.id)
+          });
+        } else {
+          console.log("Not updating metadata.needs_handling for the last thought");
+          //console.log("currentThoughtPos", currentThoughtPos);
+          //console.log("currentThoughtNode", currentThoughtNode);
+          //console.log("isLastThought", isLastThought);
+        }
 
         if (!tr.selection.empty) tr.deleteSelection();
         const position = tr.selection.from; // Insert position
@@ -221,64 +241,16 @@ function App() {
     Backspace: (state, dispatch) => {
       // Use the joinBackward command directly
       // It returns true if it performed an action, false otherwise
+      const currThoughtId = state.selection.$head.parent.attrs.id;
+      console.log("backspacing while in thought id: ", currThoughtId);
       const jbRes = joinBackward(state, dispatch);
       // Remove the thought that is being deleted from the Supabase database
-      if (jbRes) {
-        const thoughtId = state.selection.$head.parent.attrs.id;
-        supabase
-          .from("thoughts")
-          .delete()
-          .eq("id", thoughtId)
-          .then(({ data, error }) => {
-            if (error) {
-              console.error("Error deleting thought from database", error);
-            } else {
-              console.log(`Deleted thought with id ${thoughtId} from database`, data);
-            }
-          });
-      }
+      setThoughtIdsToUpdate((prev) => {
+        return new Set(prev).add(currThoughtId)
+      })
       return jbRes;
     },
   });
-
-  //async function computeIndex(agentName: string, insertAfterIndex?: number) {
-  //  if (insertAfterIndex !== undefined) {
-  //    console.log("computijng index for insertAfterIndex: ", insertAfterIndex);
-  //    // get the index of the thought after which we want to insert
-  //    // and insert the new thought with an index that is the average of the two
-  //    // truncate the beginning so that the first thought is the one with
-  //    // index = insertAfterIndex
-  //    const { data: sortedThoughtsAfterProvidedIndex, error: thoughtError } = await supabase
-  //      .from("thoughts")
-  //      .select("index")
-  //      .eq("agent_name", agentName)
-  //      .order("index", { ascending: true })
-  //      .gt("index", insertAfterIndex)
-  //      .limit(1)
-  //      .maybeSingle();
-  //    if (thoughtError) {
-  //      console.error("Error fetching thoughts with index greater than insertAfterIndex", thoughtError);
-  //      throw thoughtError;
-  //    }
-  //    if (sortedThoughtsAfterProvidedIndex === null) {
-  //      return insertAfterIndex + 1.0;
-  //    } else {
-  //      return (insertAfterIndex + sortedThoughtsAfterProvidedIndex.index) / 2;
-  //    }
-  //  } else {
-  //    const { data: maxCurrIndexData, error: maxIndexError } = await supabase
-  //      .from("thoughts")
-  //      .select("index")
-  //      .eq("agent_name", agentName)
-  //      .order("index", { ascending: true })
-  //      .limit(1);
-  //    if (maxIndexError) {
-  //      console.error("Error fetching max(index)", maxIndexError);
-  //      throw maxIndexError;
-  //    }
-  //    return maxCurrIndexData ? maxCurrIndexData[0].index + 1.0 : 0.0;
-  //  }
-  //}
 
   async function addNewThoughtToDatabase(id: string, body: string, agentName: string, index: number) {
     const { data, error } = await supabase
@@ -287,19 +259,89 @@ function App() {
     if (error) {
       console.error("Error adding new thought to database", error);
     } else {
-      console.log("Added new thought to database", data);
+      console.log("Added new thought to database ", id);
     }
   }
 
-  const updateThoughtInDatabase = debounce(async (id: string, body: string) => {
-    const { error } = await supabase.from("thoughts").update({ body }).eq("id", id);
+  function pushToDB(idsToUpdate: Set<string>) {
+    // get the editor state as Json so we can fetch thoughts from it by id
+    console.log("pushToDB called wit isToUpdate: ", idsToUpdate)
+    const edState = editorViewRef.current?.state.toJSON();
+    idsToUpdate.forEach(async (id: string) => {
+      const thought = edState?.doc.content.find((node: any) => node.attrs.id === id);
+      if (thought === undefined) {
+        console.log(`deleting thought with id ${id} from databaset`)
+        supabase
+          .from("thoughts")
+          .delete()
+          .eq("id", id)
+          .then(({ data, error }) => {
+            if (error) {
+              console.error("Error deleting thought from database", error);
+            } else {
+              console.log(`Deleted thought with id ${id} from database`, data);
+            }
+          });
+      } else {
+        console.log("pushing updates to database for thought: ", thought)
+        const thoughtText = thought.content ? thought.content.reduce((acc: string, node: any) => {
+          return acc + node.text;
+        }, "") : "";
+        const { error } = await supabase
+          .from("thoughts")
+          .update(
+            { ...thought.attrs, agent_name: selectedAgentName, body: thoughtText },
+          )
+          .eq("id", id);
+        if (error) {
+          console.error("Error updating thought:", error);
+        } else {
+          console.log(`Thought ${id} updated successfully.`);
+        }
+      }
+    })
+    setThoughtIdsToUpdate(new Set());
+  }
 
-    if (error) {
-      console.error("Error updating thought:", error);
-    } else {
-      console.log(`Thought ${id} updated successfully.`);
+  const throttlePushToDB = useMemo(() => throttle(pushToDB, 1000), [])
+
+  useEffect(() => {
+    if (thoughtsIdsToUpdate.size === 0) {
+      return;
     }
-  }, 1000); // Debounce for 1 second
+    throttlePushToDB(thoughtsIdsToUpdate);
+  }, [thoughtsIdsToUpdate]);
+
+  useEffect(() => {
+    const envPresenceRoom = supabase.channel("env_presence_room");
+    envPresenceRoom
+      .on("presence", { event: "sync" }, () => {
+        const newState = envPresenceRoom.presenceState();
+        console.log("sync", newState);
+      })
+      .on("presence", { event: "join" }, ({ key, newPresences }) => {
+        console.log("join", key, newPresences);
+        if (key === "env") {
+          if (envStatus === "attached") {
+            console.log("env already attached, ignoring new env");
+            return;
+          }
+          setEnvStatus("attached");
+        }
+      })
+      .on("presence", { event: "leave" }, ({ key, leftPresences }) => {
+        if (key === "env") {
+          if (envStatus !== "detached") {
+            setEnvStatus("detached");
+          }
+        }
+      })
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          await envPresenceRoom.track({ online_at: new Date().toISOString() });
+        }
+      });
+  }, []);
 
   useEffect(() => {
     const fetchThoughts = async () => {
@@ -357,7 +399,6 @@ function App() {
         return schema.nodes.thought.create(thoughtAttrs);
       }
     });
-    console.log("initialDocContent: ", initialDocContent);
     const initialContent = schema.nodes.doc.create({}, initialDocContent);
 
     const state = EditorState.create({
@@ -373,24 +414,26 @@ function App() {
           return;
         }
         const newState = editorViewRef.current.state.apply(transaction);
-        editorViewRef.current.updateState(newState);
 
-        // Only proceed if the document has changed
-        if (!transaction.docChanged) return;
+        if (transaction.docChanged) {
+          const { from, to } = newState.selection;
+          let currentThoughtId: string | null = null;
+          newState.doc.nodesBetween(from, to, (node, pos) => {
+            if (node.type.name === "thought") {
+              currentThoughtId = node.attrs.id; // Assuming each thought node has a unique ID
+              return false; // Stop iterating once the first thought node is found
+            }
+          });
 
-        const { from, to } = newState.selection;
-        let currentThoughtId = null;
-        newState.doc.nodesBetween(from, to, (node, pos) => {
-          if (node.type.name === "thought") {
-            currentThoughtId = node.attrs.id; // Assuming each thought node has a unique ID
-            return false; // Stop iterating once the first thought node is found
+          if (currentThoughtId !== null) {
+            setThoughtIdsToUpdate((prev) => {
+              return new Set(prev).add(currentThoughtId)
+            })
           }
-        });
-
-        if (currentThoughtId) {
-          const thoughtText = extractThoughtTextFromPosition(newState.doc, from);
-          updateThoughtInDatabase(currentThoughtId, thoughtText);
+        } else {
+          console.log("doc didn't change");
         }
+        editorViewRef.current.updateState(newState);
       },
     });
 
@@ -484,6 +527,11 @@ function App() {
 
   return (
     <div className="App">
+      {envStatus === "attached" ? (
+        <div className="text-green-500 text-right">Attached to environment</div>
+      ) : (
+        <div className="text-red-500 text-right">Detached from environment</div>
+      )}
       <div className="border border-solid border-slate-100 w-full p-1" ref={editorRef}></div>
       <div className="flex mt-2">
         <button className="bg-blue-500 pl-2 pr-2" onClick={generateThought}>
@@ -492,18 +540,18 @@ function App() {
         <div className="pt-3">
           {import.meta.env.HF_API_KEY && import.meta.env.HF_LLAMA_ENDPOINT ? (
             <>
-              <label className="ml-3" htmlFor="modelSelection">Model: </label>
-              <select 
-                id="modelSelection"
-                value={modelSelection}
-                onChange={(e) => setModelSelection(e.target.value)}
-              >
+              <label className="ml-3" htmlFor="modelSelection">
+                Model:{" "}
+              </label>
+              <select id="modelSelection" value={modelSelection} onChange={(e) => setModelSelection(e.target.value)}>
                 <option value="GPT4">GPT4</option>
                 <option value="Headlong 7B">Headlong 7B</option>
               </select>
             </>
           ) : null}
-          <label className="ml-3" htmlFor="modelTemperature">Temperature: </label>
+          <label className="ml-3" htmlFor="modelTemperature">
+            Temperature:{" "}
+          </label>
           <input
             className="w-14"
             type="number"
