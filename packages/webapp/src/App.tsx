@@ -188,7 +188,7 @@ function App() {
 
         // Perform the necessary updates
         if (isLastThought) {
-          console.log("Updating metadata.needs_handling for the last thought");
+          console.log("Setting metadata.needs_handling = true for the 2nd to last thought");
           tr.setNodeAttribute(currentThoughtPos, "metadata", { needs_handling: true } );
           setThoughtIdsToUpdate((prev) => {
             return new Set(prev).add(currentThoughtNode.attrs.id)

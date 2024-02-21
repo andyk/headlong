@@ -1,0 +1,29 @@
+{
+  "name": "headlong-env",
+  "version": "0.1.0",
+  "description": "A process that provides actuation and sensory input for a headlong agent. Operates by listening to the headlong var, executing actions, and updating the headlong var with observations.",
+  "main": "index.js",
+  "scripts": {
+    "bashServer": "npx ts-node bashServer.ts",
+    "bashCLI": "npx ts-node bashServerCLI.ts",
+    "env": "npx ts-node main.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@mozilla/readability": "^0.4.4",
+    "@supabase/supabase-js": "^2.39.7",
+    "api": "^6.1.1",
+    "immutable": "^4.3.1",
+    "jsdom": "^23.0.0",
+    "openai": "^4.20.0",
+    "serpapi": "^2.0.0",
+    "ts-node": "^10.9.1",
+    "twilio": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^21.1.6",
+    "typescript": "^5.2.2"
+  }
+}

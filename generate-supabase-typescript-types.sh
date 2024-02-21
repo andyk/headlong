@@ -1,5 +1,9 @@
 # make a backup of the current database.types.ts file if it exists
-if [ -f src/database.types.ts ]; then
-  mv src/database.types.ts src/database.types.ts.bak
+if [ -f packages/webapp/src/database.types.ts ]; then
+  mv packages/webapp/src/database.types.ts packages/webapp/src/database.types.ts.bak
 fi
-supabase gen types typescript --linked > src/database.types.ts
+if [ -f packages/env/database.types.ts ]; then
+  mv packages/env/database.types.ts packages/env/database.types.ts.bak
+fi
+supabase gen types typescript --linked > packages/webapp/src/database.types.ts
+supabase gen types typescript --linked > packages/env/database.types.ts
