@@ -6,7 +6,7 @@
   "scripts": {
     "bashServer": "npx ts-node bashServer.ts",
     "bashCLI": "npx ts-node bashServerCLI.ts",
-    "env": "npx ts-node main.ts",
+    "env": "node -r ts-node/register --env-file=../../.env main.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
