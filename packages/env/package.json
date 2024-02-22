@@ -6,7 +6,7 @@
   "scripts": {
     "bashServer": "npx ts-node bashServer.ts",
     "bashCLI": "npx ts-node bashServerCLI.ts",
-    "env": "node -r ts-node/register --env-file=../../.env main.ts",
+    "env": "DOTENV_CONFIG_PATH=../../.env node -r ts-node/register -r dotenv/config main.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
@@ -15,6 +15,7 @@
     "@mozilla/readability": "^0.4.4",
     "@supabase/supabase-js": "^2.39.7",
     "api": "^6.1.1",
+    "dotenv": "^16.4.5",
     "immutable": "^4.3.1",
     "jsdom": "^23.0.0",
     "openai": "^4.20.0",

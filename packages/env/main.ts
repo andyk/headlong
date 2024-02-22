@@ -1,7 +1,7 @@
+import 'dotenv/config';
 import openai from "./openai";
 import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { getJson } from "serpapi";
-import api from "api";
 import { Readability } from "@mozilla/readability";
 import { JSDOM } from "jsdom";
 import twilioSDK from "twilio";
@@ -382,7 +382,6 @@ async function addNewThought(agentName: string, body: string, addAfterIndex?: nu
     }
     if (row) {
       console.log("inserted thought: ", row);
-
     }
   }
 }
