@@ -20,10 +20,6 @@ const openAITemp = 0.5;
 
 const serpApiKeyEnvName = process.env["SERPAPI_API_KEY"];
 
-const pplx = api("@pplx/v0#wqe1glpipk635");
-const pplxApiKeyEnvName = "PPLX_API_KEY";
-pplx.auth(process.env[pplxApiKeyEnvName]);
-
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
@@ -370,7 +366,24 @@ async function addNewThought(agentName: string, body: string, addAfterIndex?: nu
   } else {
     const computedIndex = await computeInsertIndex(addAfterIndex);
     console.log("Inserting thought with computed index: ", computedIndex);
-    supabase.from("thoughts").insert([{ agent_name: agentName, body: body, index: computedIndex }]);
+    const { data: row, error } = await supabase
+      .from("thoughts")
+      .insert([
+        {
+          agent_name: agentName,
+          body: body,
+          index: computedIndex
+        }
+      ])
+      .select('*')
+      .maybeSingle();
+    if (error) {
+      console.error("Error inserting thought", error);
+    }
+    if (row) {
+      console.log("inserted thought: ", row);
+
+    }
   }
 }
 
@@ -381,7 +394,11 @@ bashServerClient.on("data", (data) => {
 
 const handleThought = async (thought: Thought) => {
   // test if thought.body starts with "action: " and return if not
-  if (thought.body.toLowerCase().startsWith("action: ") && thought.metadata !== null && thought.metadata["needs_handling"] === true) {
+  if (
+    thought.body.toLowerCase().startsWith("action: ") &&
+    thought.metadata !== null &&
+    thought.metadata["needs_handling"] === true
+  ) {
     console.log("Handling action: ", thought);
     // update the thought row to mark needs_handling as false
     const { data, error } = await supabase
@@ -417,7 +434,7 @@ const handleThought = async (thought: Thought) => {
     tool_choice: "auto",
   });
 
- console.log("GPT4 completion: ", completion.choices[0].message);
+  console.log("GPT4 completion: ", completion.choices[0].message);
 
   if (completion.choices[0].message.content) {
     addNewThought(agentName, completion.choices[0].message.content);
@@ -453,6 +470,8 @@ supabase
   )
   .subscribe();
 
+console.log("");
+
 const envPresenceRoom = supabase.channel("env_presence_room", {
   config: {
     presence: {
@@ -472,10 +491,10 @@ envPresenceRoom
     console.log("env_presence_room had a leave", key, leftPresences);
   })
   .subscribe(async (status) => {
-    if (status === 'SUBSCRIBED') {
-      await envPresenceRoom.track({ online_at: new Date().toISOString() })
+    if (status === "SUBSCRIBED") {
+      await envPresenceRoom.track({ online_at: new Date().toISOString() });
     }
-  })
+  });
 console.log("registered tools:\n", Object.keys(tools).join("\n"));
 // TODO: Register any env listeners that would async interrupt "observations: "
 // (or other thoughts?) into consciouness
