@@ -373,7 +373,7 @@ function App() {
         thought: {
           attrs: { id: { default: uuidv4() }, index: { default: 0}, metadata: {default: null} },
           content: "text*",
-          toDOM: () => ["p", 0],
+          toDOM: () => ["p", {style: "border-bottom: thin #444 solid"}, 0],
         },
         text: {},
       },
