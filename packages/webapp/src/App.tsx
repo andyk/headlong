@@ -188,7 +188,7 @@ function App() {
 
         // Perform the necessary updates
         if (isLastThought) {
-          console.log("Updating metadata.needs_handling for the last thought");
+          console.log("Setting metadata.needs_handling = true for the 2nd to last thought");
           tr.setNodeAttribute(currentThoughtPos, "metadata", { needs_handling: true } );
           setThoughtIdsToUpdate((prev) => {
             return new Set(prev).add(currentThoughtNode.attrs.id)
@@ -371,7 +371,7 @@ function App() {
       nodes: {
         doc: { content: "thought+" },
         thought: {
-          attrs: { id: { default: uuidv4() }, index: { default: 0 } },
+          attrs: { id: { default: uuidv4() }, index: { default: 0}, metadata: {default: null} },
           content: "text*",
           toDOM: () => ["p", 0],
         },
@@ -392,6 +392,7 @@ function App() {
         index: thought.index,
         created_at: thought.created_at,
         processed_at: thought.processed_at,
+        metadata: thought.metadata
       };
       if (thought.body) {
         return schema.nodes.thought.create(thoughtAttrs, schema.text(thought.body));
@@ -538,7 +539,7 @@ function App() {
           Generate
         </button>
         <div className="pt-3">
-          {import.meta.env.HF_API_KEY && import.meta.env.HF_LLAMA_ENDPOINT ? (
+          {import.meta.env.VITE_HF_API_KEY && import.meta.env.VITE_HF_LLAMA_ENDPOINT ? (
             <>
               <label className="ml-3" htmlFor="modelSelection">
                 Model:{" "}

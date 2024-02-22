@@ -1,3 +1,5 @@
+**/.env
+
 # Logs
 logs
 *.log
@@ -22,3 +24,5 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+packages/env/bash_history
