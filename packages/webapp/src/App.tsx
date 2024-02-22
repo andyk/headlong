@@ -3,7 +3,7 @@ import "./App-compiled.css";
 import { Schema, Node as ProseMirrorNode } from "prosemirror-model";
 import { EditorState, Transaction } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
-import { joinBackward } from "prosemirror-commands";
+import { joinTextblockBackward } from "prosemirror-commands";
 import { keymap } from "prosemirror-keymap";
 import { Plugin, TextSelection } from "prosemirror-state";
 import supabase from "./supabase";
@@ -243,7 +243,7 @@ function App() {
       // It returns true if it performed an action, false otherwise
       const currThoughtId = state.selection.$head.parent.attrs.id;
       console.log("backspacing while in thought id: ", currThoughtId);
-      const jbRes = joinBackward(state, dispatch);
+      const jbRes = joinTextblockBackward(state, dispatch);
       // Remove the thought that is being deleted from the Supabase database
       setThoughtIdsToUpdate((prev) => {
         return new Set(prev).add(currThoughtId)
