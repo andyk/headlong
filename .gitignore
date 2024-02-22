@@ -26,3 +26,6 @@ dist-ssr
 *.sw?
 
 packages/env/bash_history
+
+*.env
+env

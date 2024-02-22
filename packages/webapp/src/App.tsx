@@ -10,12 +10,8 @@ import { undo, redo, history } from "prosemirror-history";
 import supabase from "./supabase";
 import { v4 as uuidv4 } from "uuid";
 import openai from "./openai";
-import hf from "./huggingface";
-import {
-  ChatCompletionAssistantMessageParam,
-  ChatCompletionSystemMessageParam,
-  ChatCompletionMessageParam,
-} from "openai/resources/chat/completions";
+import {hf, tokenizer} from "./huggingface";
+import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { throttle } from "lodash";
 import { Database } from "./database.types";
 import "prosemirror-view/style/prosemirror.css";
@@ -35,6 +31,7 @@ const removeHighlightOnInputPlugin = new Plugin({
       if (tr.docChanged) {
         // Loop through each step in the transaction
         tr.steps.forEach((step) => {
+          // console.log("step.toJSON().stepType: ", step.toJSON().stepType);
           if (step.toJSON().stepType === "addMark") {
             markAdded = true;
           }
@@ -88,17 +85,64 @@ function App() {
   const [envStatus, setEnvStatus] = useState("detached");
   const [thoughtIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
 
+  // Put userMessage before/after each assistantMessage and append sysMessage (if given) to the beginning
+  // [assist0, assist1, assist2] -> [sys, user, assist0, user, assist1, user]
+  function promptedThoughtStream(
+    sysMessage: string,
+    userMessage: string,
+    assistantMessages: string[]) {
+      const allMessages = [];
+      if (sysMessage) {
+        allMessages.push({role: 'system', content: sysMessage});
+      }
+      for (const message of assistantMessages) {
+        if (message) {
+          allMessages.push({role: 'user', content: userMessage});
+          allMessages.push({role: 'assistant', content: message});
+        }
+      }
+      allMessages.push({role: 'user', content: userMessage});
+      return allMessages;
+    }
+
+    // Format thought stream according to the Llama chat template. No dependency on Transformers lib
+    function getLlamaTemplatedChat(
+      sysMessage: string,
+      userMessage: string,
+      assistantMessages: string[]
+    ){
+      let templatedChat = "<s>[INST] ";
+      if (sysMessage) {
+        templatedChat = templatedChat.concat("<<SYS>>\n", sysMessage, "\n<</SYS>>\n\n");
+      }
+      templatedChat = templatedChat.concat(userMessage, " [/INST]");
+
+      for (const message of assistantMessages) {
+        if (message) {
+          templatedChat = templatedChat.concat(" ", message.trim(), " </s><s>[INST] ", userMessage, " [/INST]");
+        }          
+      }
+      return templatedChat;
+    }
+
   async function gpt4TurboChat(options: {
-    messages: ChatCompletionMessageParam[];
+    sysMessage: string;
+    userMessage: string;
+    assistantMessages: string[];
     max_tokens?: number;
     temperature?: number;
     stream?: boolean; // Add stream option
     onDelta: (delta: any) => void; // Callback to handle incoming data
-  }) {
+  }) {  
     // Assuming the OpenAI SDK has an event emitter or callback mechanism for streaming
+    const allMessageParams = promptedThoughtStream(options.sysMessage, options.userMessage, options.assistantMessages);
+    // Old version
+    // const allMessageParams  =
+    //   [{role: 'system', content: options.sysMessage}]
+    //   + options.assistantMessages.map(message  => ({ role: 'assistant' , content: message }));
     const completion = await openai.chat.completions.create({
       model: "gpt-4-1106-preview",
-      messages: options.messages,
+      messages: allMessageParams as ChatCompletionMessageParam[],
       max_tokens: options.max_tokens ?? 100,
       temperature: options.temperature ?? 0.5,
       stream: options.stream ?? true,
@@ -114,42 +158,42 @@ function App() {
   }
 
   async function huggingFaceChat(options: {
-    messages: ChatCompletionMessageParam[];
+    sysMessage: string;
+    userMessage: string;
+    assistantMessages: string[];
     max_tokens?: number;
     temperature?: number;
     stream?: boolean; // Add stream option
     onDelta: (delta: any) => void; // Callback to handle incoming data
   }) {
-    // Generate prompt accoriding to HF template. 'user' messages aren't handled
-    let prompt = "";
-    for await (const message of options.messages) {
-      switch (message.role) {
-        case "system":
-          prompt = prompt.concat("<s> [INST] <<SYS>> ", message.content, " </SYS>> [/INST]");
-          break;
-        case "assistant":
-          prompt = prompt.concat(message.content ?? "", "\n");
-          break;
-        default:
-          console.log("Unknown message type");
-      }
-    }
-    console.log("Prompt:\n", prompt);
+    const includeSysMessage = false;
+    const templatedChat =
+      tokenizer.apply_chat_template(
+        promptedThoughtStream(
+          includeSysMessage ? options.sysMessage : "",
+          options.userMessage,
+          options.assistantMessages),
+        { tokenize: false,
+          add_generation_prompt: false,
+          return_tensor: false,
+        });
+    const templatedChat2 = getLlamaTemplatedChat(options.sysMessage, options.userMessage, options.assistantMessages)
+    console.log("templates match ", templatedChat == templatedChat2);
 
     const completion = hf.textGenerationStream({
-      inputs: prompt,
+      inputs: templatedChat,
       parameters: {
         max_new_tokens: options.max_tokens ?? 100,
         temperature: options.temperature ?? 0.5,
         return_full_text: false,
         // repetition_penalty: 1,
-      },
-    });
+      }
+    },
+    { wait_for_model: true});
 
     let reply = "";
     const stream = completion as AsyncIterable<any>;
     for await (const chunk of stream) {
-      // console.log(chunk);
       const delta = chunk.token?.text || "";
       reply = reply.concat(delta);
       // Llama always finishes assistant completions with </s>, so it should be the last delta
@@ -865,24 +909,19 @@ function App() {
     // Prepare for LLM text generation
     const thoughts = extractThoughtTexts(editorViewRef.current.state.doc);
     console.log("thoughts: ", thoughts);
+    // use editorView to get the thought id of the current selection
     const currThoughtId = newThoughtId; // Use the newly created thought ID
-    const thoughtsAfterCurr = thoughts.slice(
-      0,
-      thoughts.findIndex(([id, _]) => id === currThoughtId)
-    );
-    const sysMessage = {
-      role: "system",
-      content: "Come up with the next thought based on the following stream of thoughts",
-    };
-    const assistantMessages = thoughtsAfterCurr.map(([id, body]) => ({
-      role: "assistant",
-      content: body,
-    }));
-    const messages = [sysMessage, ...assistantMessages];
-    console.log("messages: ", messages);
-
+    // create a new list from `thoughts` that only has thoughts up to and including
+    // the thought with currThoughtId
+    const thoughtsAfterCurr = thoughts.slice(0, thoughts.findIndex(([id, _]) => id === currThoughtId) + 1);
+    const sysMessage = "You are going to do some thinking on your own. Try to be conscious of your own thoughts so you can tell them to me one by one.";
+    const userMessage = "What is your next thought?";
+    const assistantMessages: string[] = thoughtsAfterCurr.map(([_, body]) => {return body;});
+    console.log("Assistant Messages: ", assistantMessages);
     const chatArgs = {
-      messages: messages,
+      sysMessage: sysMessage,
+      userMessage: userMessage,
+      assistantMessages: assistantMessages,
       temperature: modelTemperature,
       stream: true,
       onDelta: async (delta) => {
