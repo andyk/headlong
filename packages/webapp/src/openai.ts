@@ -1,6 +1,6 @@
 import OpenAI from "openai";
-const openAiOrg = import.meta.env.OPENAI_ORG;
-const openAiApiKey = import.meta.env.OPENAI_API_KEY;
+const openAiOrg = import.meta.env.VITE_OPENAI_ORG;
+const openAiApiKey = import.meta.env.VITE_OPENAI_API_KEY;
 console.log("openAiOrg: ", openAiOrg);
 console.log("openAiApiKey: ", openAiApiKey);
 const openai = new OpenAI({

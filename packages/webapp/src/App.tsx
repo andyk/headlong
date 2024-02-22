@@ -538,7 +538,7 @@ function App() {
           Generate
         </button>
         <div className="pt-3">
-          {import.meta.env.HF_API_KEY && import.meta.env.HF_LLAMA_ENDPOINT ? (
+          {import.meta.env.VITE_HF_API_KEY && import.meta.env.VITE_HF_LLAMA_ENDPOINT ? (
             <>
               <label className="ml-3" htmlFor="modelSelection">
                 Model:{" "}
