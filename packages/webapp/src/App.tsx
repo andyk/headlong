@@ -371,7 +371,7 @@ function App() {
       nodes: {
         doc: { content: "thought+" },
         thought: {
-          attrs: { id: { default: uuidv4() }, index: { default: 0 } },
+          attrs: { id: { default: uuidv4() }, index: { default: 0}, metadata: {default: null} },
           content: "text*",
           toDOM: () => ["p", 0],
         },
@@ -392,6 +392,7 @@ function App() {
         index: thought.index,
         created_at: thought.created_at,
         processed_at: thought.processed_at,
+        metadata: thought.metadata
       };
       if (thought.body) {
         return schema.nodes.thought.create(thoughtAttrs, schema.text(thought.body));
