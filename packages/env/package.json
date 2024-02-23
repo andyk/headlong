@@ -18,13 +18,16 @@
     "dotenv": "^16.4.5",
     "immutable": "^4.3.1",
     "jsdom": "^23.0.0",
+    "node-pty": "^1.0.0",
     "openai": "^4.20.0",
     "serpapi": "^2.0.0",
     "ts-node": "^10.9.1",
-    "twilio": "^4.19.0"
+    "twilio": "^4.19.0",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "@types/jsdom": "^21.1.6",
+    "@types/uuid": "^9.0.8",
     "typescript": "^5.2.2"
   }
 }
