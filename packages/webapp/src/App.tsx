@@ -250,7 +250,7 @@ function App() {
 
   const ctrlEnterKeyPlugin = keymap({
     "Ctrl-Enter": (state, dispatch) => {
-      console.log('ctrl-enter, dispatch is ', dispatch);
+      console.log("ctrl-enter, dispatch is ", dispatch);
       if (dispatch) {
         // Assuming you have a way to identify the current thought node
         // This is a simplistic approach, adjust according to your actual node structure and IDs
@@ -258,21 +258,21 @@ function App() {
         const currentThoughtIndex: number = $head.parent.attrs.index;
         const currentThoughtPos = state.selection.$head.before();
         const node = state.doc.nodeAt(currentThoughtPos);
-  
+
         console.log("currentThoughtIndex: ", currentThoughtIndex);
         console.log("node: ", node);
         console.log("nodeType: ", node?.type.name);
         if (node && node.type.name === "thought") {
-          console.log('handling thought');
+          console.log("handling thought");
           const metadataAttr = { ...node.attrs.metadata, needs_handling: true };
           const transaction = state.tr.setNodeAttribute(currentThoughtPos, "metadata", metadataAttr);
           dispatch(transaction);
           return true;
         }
       }
-  
+
       return false;
-    }
+    },
   });
 
   const backspaceKeyPlugin = keymap({
@@ -307,6 +307,8 @@ function App() {
     const edState = editorViewRef.current?.state.toJSON();
     idsToUpdate.forEach(async (id: string) => {
       const thought = edState?.doc.content.find((node: any) => node.attrs.id === id);
+      // access the marks within this thought
+
       if (thought === undefined) {
         console.log(`deleting thought with id ${id} from databaset`);
         supabase
@@ -327,15 +329,24 @@ function App() {
               return acc + node.text;
             }, "")
           : "";
+        // make an array of the marks associated with each node of thought.content and add it to the metadata
+        const marks = thought.content
+          ? thought.content.reduce((acc: [[number, any]], node: any) => {
+              return acc.concat([node.text.length, node.marks]);
+            }, [])
+          : [];
+        console.log("marks: ", marks);
         const { error } = await supabase
           .from(THOUGHTS_TABLE_NAME)
-          .update(
-            {
-              ...thought.attrs,
-              metadata: { ...thought.attrs.metadata, last_updated_by: APP_INSTANCE_ID },
-              agent_name: selectedAgentName,
-              body: thoughtText
-            })
+          .update({
+            ...thought.attrs,
+            metadata: {
+              ...thought.attrs.metadata,
+              last_updated_by: APP_INSTANCE_ID,
+            },
+            agent_name: selectedAgentName,
+            body: thoughtText,
+          })
           .eq("id", id);
         if (error) {
           console.error("Error updating thought:", error);
@@ -524,14 +535,14 @@ function App() {
         thought: {
           attrs: { id: { default: uuidv4() }, index: { default: 0 }, metadata: { default: null } },
           content: "text*",
-          toDOM: () => ["p", { style: "border-bottom: thin #444 solid" }, 0],
+          toDOM: () => ["p", { style: "border-bottom: thin #393939 solid" }, 0],
         },
         text: {},
       },
       marks: {
         highlight: {
-          toDOM: () => ["span", { style: "background-color: green;" }, 0],
-          parseDOM: [{ tag: "span", style: "background-color: green;" }],
+          toDOM: () => ["span", { style: "background-color: purple;" }, 0],
+          parseDOM: [{ tag: "span", style: "background-color: purple;" }],
         },
       },
     });
@@ -590,10 +601,10 @@ function App() {
     });
 
     const selection = ProsemirrorSelection.atEnd(view.state.doc);
-    console.log("selection: ", selection)
+    console.log("selection: ", selection);
     const tr = view.state.tr.setSelection(selection).scrollIntoView();
-    const updatedState = view.state.apply(tr)
-    view.updateState(updatedState)
+    const updatedState = view.state.apply(tr);
+    view.updateState(updatedState);
 
     editorViewRef.current = view;
 
@@ -688,13 +699,41 @@ function App() {
 
   return (
     <div className="App flex flex-col max-h-screen">
-      <div className="text-green-500 text-right p-2"> {/* Use p-2 for padding, adjust as needed */}
-        {envStatus === "attached" ? "Attached to environment" : "Detached from environment"}
+      <div className="w-screen flex">
+        <svg xmlns="http://www.w3.org/2000/svg" width="61" height="49.5" viewBox="0 0 61 49.5" className="flex-none">
+          <rect x="8" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
+          <rect x="23" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
+          <rect x="36.5" y="33.5" width="11.5" height="9" style={{ fill: "#b87df9" }} />
+        </svg>
+        <div className="flex-grow flex justify-end">
+          <div className="flex items-center space-x-2 p-2 rounded-md">
+            {envStatus === "attached" ? (
+              <>
+                <span className="text-sm text-green-500">Environment</span>
+                {/* Online Icon */}
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-500" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.293a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-red-500">Environment</span>
+                {/* Offline Icon: Red circle (outline) with a red "X" */}
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="9" stroke="#ef4444" fill="none" strokeWidth="2" /> {/* Red outlined circle with black fill */}
+                  <path stroke="#ef4444" strokeLinecap="round" strokeWidth="2" d="M6 6l8 8m0 -8l-8 8" /> {/* Red X */}
+                </svg>
+              </>
+            )}
+          </div>
+        </div>
       </div>
-      <div className="flex-grow overflow-y-auto border border-solid border-slate-100">
+      <div className="flex-grow overflow-y-auto border border-solid border-[#e3ccfc]">
         <div ref={editorRef} className="w-full h-full"></div> {/* Ensure the ref div fills its parent */}
       </div>
-      <div className="flex justify-between items-center p-2 border-t border-slate-200"> {/* Use p-2 for padding and bg-gray-100 for a light background */}
+      <div className="flex justify-between items-center p-2 border-t border-slate-200">
+        {" "}
+        {/* Use p-2 for padding and bg-gray-100 for a light background */}
         <button className="bg-blue-500 text-white py-1 px-2 rounded-md" onClick={generateThought}>
           Generate
         </button>
@@ -704,7 +743,12 @@ function App() {
               <label htmlFor="modelSelection" className="ml-3">
                 Model:{" "}
               </label>
-              <select id="modelSelection" value={modelSelection} onChange={(e) => setModelSelection(e.target.value)} className="ml-1">
+              <select
+                id="modelSelection"
+                value={modelSelection}
+                onChange={(e) => setModelSelection(e.target.value)}
+                className="ml-1"
+              >
                 <option value="GPT4">GPT4</option>
                 <option value="Headlong 7B">Headlong 7B</option>
               </select>
