@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import "./App-compiled.css";
 import { Schema, Node as ProseMirrorNode } from "prosemirror-model";
-import { EditorState, Transaction } from "prosemirror-state";
+import { EditorState, Transaction, Selection as ProsemirrorSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { joinTextblockBackward } from "prosemirror-commands";
 import { keymap } from "prosemirror-keymap";
@@ -246,6 +246,33 @@ function App() {
       }
       return false;
     },
+  });
+
+  const ctrlEnterKeyPlugin = keymap({
+    "Ctrl-Enter": (state, dispatch) => {
+      console.log('ctrl-enter, dispatch is ', dispatch);
+      if (dispatch) {
+        // Assuming you have a way to identify the current thought node
+        // This is a simplistic approach, adjust according to your actual node structure and IDs
+        const { $head } = state.selection;
+        const currentThoughtIndex: number = $head.parent.attrs.index;
+        const currentThoughtPos = state.selection.$head.before();
+        const node = state.doc.nodeAt(currentThoughtPos);
+  
+        console.log("currentThoughtIndex: ", currentThoughtIndex);
+        console.log("node: ", node);
+        console.log("nodeType: ", node?.type.name);
+        if (node && node.type.name === "thought") {
+          console.log('handling thought');
+          const metadataAttr = { ...node.attrs.metadata, needs_handling: true };
+          const transaction = state.tr.setNodeAttribute(currentThoughtPos, "metadata", metadataAttr);
+          dispatch(transaction);
+          return true;
+        }
+      }
+  
+      return false;
+    }
   });
 
   const backspaceKeyPlugin = keymap({
@@ -526,10 +553,10 @@ function App() {
     });
     const initialContent = schema.nodes.doc.create({}, initialDocContent);
 
-    const state = EditorState.create({
+    let state = EditorState.create({
       doc: initialContent,
       schema,
-      plugins: [removeHighlightOnInputPlugin, enterKeyPlugin, backspaceKeyPlugin],
+      plugins: [removeHighlightOnInputPlugin, enterKeyPlugin, ctrlEnterKeyPlugin, backspaceKeyPlugin],
     });
 
     const view = new EditorView(editorRef.current, {
@@ -561,6 +588,12 @@ function App() {
         editorViewRef.current.updateState(newState);
       },
     });
+
+    const selection = ProsemirrorSelection.atEnd(view.state.doc);
+    console.log("selection: ", selection)
+    const tr = view.state.tr.setSelection(selection).scrollIntoView();
+    const updatedState = view.state.apply(tr)
+    view.updateState(updatedState)
 
     editorViewRef.current = view;
 
@@ -654,34 +687,33 @@ function App() {
   };
 
   return (
-    <div className="App">
-      {envStatus === "attached" ? (
-        <div className="text-green-500 text-right">Attached to environment</div>
-      ) : (
-        <div className="text-red-500 text-right">Detached from environment</div>
-      )}
-      <div className="border border-solid border-slate-100 w-full p-1" ref={editorRef}></div>
-      <div className="flex mt-2">
-        <button className="bg-blue-500 pl-2 pr-2" onClick={generateThought}>
+    <div className="App flex flex-col max-h-screen">
+      <div className="text-green-500 text-right p-2"> {/* Use p-2 for padding, adjust as needed */}
+        {envStatus === "attached" ? "Attached to environment" : "Detached from environment"}
+      </div>
+      <div className="flex-grow overflow-y-auto border border-solid border-slate-100">
+        <div ref={editorRef} className="w-full h-full"></div> {/* Ensure the ref div fills its parent */}
+      </div>
+      <div className="flex justify-between items-center p-2 border-t border-slate-200"> {/* Use p-2 for padding and bg-gray-100 for a light background */}
+        <button className="bg-blue-500 text-white py-1 px-2 rounded-md" onClick={generateThought}>
           Generate
         </button>
-        <div className="pt-3">
-          {import.meta.env.VITE_HF_API_KEY && import.meta.env.VITE_HF_LLAMA_ENDPOINT ? (
+        <div className="flex items-center">
+          {import.meta.env.VITE_HF_API_KEY && import.meta.env.VITE_HF_LLAMA_ENDPOINT && (
             <>
-              <label className="ml-3" htmlFor="modelSelection">
+              <label htmlFor="modelSelection" className="ml-3">
                 Model:{" "}
               </label>
-              <select id="modelSelection" value={modelSelection} onChange={(e) => setModelSelection(e.target.value)}>
+              <select id="modelSelection" value={modelSelection} onChange={(e) => setModelSelection(e.target.value)} className="ml-1">
                 <option value="GPT4">GPT4</option>
                 <option value="Headlong 7B">Headlong 7B</option>
               </select>
             </>
-          ) : null}
-          <label className="ml-3" htmlFor="modelTemperature">
+          )}
+          <label htmlFor="modelTemperature" className="ml-3">
             Temperature:{" "}
           </label>
           <input
-            className="w-14"
             type="number"
             step="0.1"
             max="1.0"
@@ -689,6 +721,7 @@ function App() {
             id="modelTemperature"
             value={modelTemperature}
             onChange={(e) => setModelTemperature(parseFloat(e.target.value))}
+            className="ml-1 w-14"
           />
         </div>
       </div>
