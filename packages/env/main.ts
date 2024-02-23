@@ -7,9 +7,12 @@ import { JSDOM } from "jsdom";
 import twilioSDK from "twilio";
 import net from "net";
 import supabase from "./supabase";
+import { v4 as uuidv4 } from "uuid";
 import { Database } from "./database.types";
 
 type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
+
+const ENV_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
 
 const bashServerPort = Number(process.env.BASH_SERVER_PORT) || 3031;
 
@@ -402,7 +405,7 @@ const handleThought = async (thought: Thought) => {
     // update the thought row to mark needs_handling as false
     const { data, error } = await supabase
       .from("thoughts")
-      .update({ metadata: { needs_handling: false } })
+      .update({ metadata: { needs_handling: false, last_updated_by: ENV_INSTANCE_ID } })
       .eq("id", thought.id)
       .eq("agent_name", agentName);
   } else {
