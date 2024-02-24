@@ -6,6 +6,7 @@ import { EditorView } from "prosemirror-view";
 import { joinTextblockBackward } from "prosemirror-commands";
 import { keymap } from "prosemirror-keymap";
 import { Plugin, TextSelection } from "prosemirror-state";
+import { undo, redo, history } from "prosemirror-history";
 import supabase from "./supabase";
 import { v4 as uuidv4 } from "uuid";
 import openai from "./openai";
@@ -619,7 +620,14 @@ function App() {
     let state = EditorState.create({
       doc: initialContent,
       schema,
-      plugins: [removeHighlightOnInputPlugin, enterKeyPlugin, ctrlEnterKeyPlugin, backspaceKeyPlugin],
+      plugins: [
+        removeHighlightOnInputPlugin,
+        enterKeyPlugin,
+        ctrlEnterKeyPlugin,
+        backspaceKeyPlugin,
+        history(),
+        keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo}),
+      ],
     });
 
     const view = new EditorView(editorRef.current, {
