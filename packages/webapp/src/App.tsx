@@ -302,52 +302,68 @@ function App() {
   }
 
   function pushToDB(idsToUpdate: Set<string>) {
-    // get the editor state as Json so we can fetch thoughts from it by id
-    console.log("pushToDB called wit isToUpdate: ", idsToUpdate);
-    const edState = editorViewRef.current?.state.toJSON();
-    idsToUpdate.forEach(async (id: string) => {
-      const thought = edState?.doc.content.find((node: any) => node.attrs.id === id);
-      // access the marks within this thought
-
-      if (thought === undefined) {
-        console.log(`deleting thought with id ${id} from databaset`);
-        supabase
+    console.log("pushToDB called with isToUpdate: ", idsToUpdate);
+  
+    if (!editorViewRef.current) {
+      console.error("Editor view is not available.");
+      return;
+    }
+  
+    const { doc } = editorViewRef.current.state;
+  
+    idsToUpdate.forEach(async (id) => {
+      let foundNode: ProseMirrorNode | null = null;
+      let foundNodePos: number | null = null;
+  
+      doc.descendants((node, pos) => {
+        if (node.attrs.id === id) {
+          foundNode = node;
+          foundNodePos = pos;
+          return false; // Stop searching
+        }
+      });
+  
+      if (foundNode === null || foundNodePos === null) {
+        console.log(`Deleting thought with id ${id} from database.`);
+        const { error } = await supabase
           .from(THOUGHTS_TABLE_NAME)
           .delete()
-          .eq("id", id)
-          .then(({ data, error }) => {
-            if (error) {
-              console.error("Error deleting thought from database", error);
-            } else {
-              console.log(`Deleted thought with id ${id} from database`, data);
-            }
-          });
+          .eq("id", id);
+  
+        if (error) {
+          console.error("Error deleting thought from database", error);
+        } else {
+          console.log(`Deleted thought with id ${id} from database.`);
+        }
       } else {
-        console.log("pushing updates to database for thought: ", thought);
-        const thoughtText = thought.content
-          ? thought.content.reduce((acc: string, node: any) => {
-              return acc + node.text;
-            }, "")
-          : "";
-        // make an array of the marks associated with each node of thought.content and add it to the metadata
-        const marks = thought.content
-          ? thought.content.reduce((acc: [[number, any]], node: any) => {
-              return acc.concat([node.text.length, node.marks]);
-            }, [])
-          : [];
+        // Extract the text from the found node
+        const thoughtText = foundNode.textContent;
+        
+        // Extract marks using .toJSON() on each mark
+        const marks = foundNode.content.content.reduce((acc, node) => {
+          if (node.marks && node.marks.length > 0) {
+            const serializedMarks = node.marks.map(mark => mark.toJSON());
+            acc.push([node.nodeSize, serializedMarks]);
+          } else {
+            acc.push([node.nodeSize, null]);
+          }
+          return acc;
+        }, []);
+  
         console.log("marks: ", marks);
         const { error } = await supabase
           .from(THOUGHTS_TABLE_NAME)
           .update({
-            ...thought.attrs,
             metadata: {
-              ...thought.attrs.metadata,
+              ...foundNode.attrs.metadata,
               last_updated_by: APP_INSTANCE_ID,
+              marks,
             },
             agent_name: selectedAgentName,
             body: thoughtText,
           })
           .eq("id", id);
+  
         if (error) {
           console.error("Error updating thought:", error);
         } else {
@@ -355,9 +371,10 @@ function App() {
         }
       }
     });
+  
     setThoughtIdsToUpdate(new Set());
   }
-
+  
   const throttlePushToDB = useMemo(() => throttle(pushToDB, 1000), []);
 
   useEffect(() => {
@@ -547,7 +564,6 @@ function App() {
       },
     });
 
-    // Construct the initial document content
     const initialDocContent = thoughts.map((thought) => {
       const thoughtAttrs = {
         id: thought.id,
@@ -556,8 +572,44 @@ function App() {
         processed_at: thought.processed_at,
         metadata: thought.metadata,
       };
+
       if (thought.body) {
-        return schema.nodes.thought.create(thoughtAttrs, schema.text(thought.body));
+        // Initialize an empty array to hold the content of the thought node
+        let content = [];
+        let cursor = 0; // A cursor to track our position as we apply marks
+    
+        if (thoughtAttrs.metadata && thoughtAttrs.metadata.marks) {
+          thoughtAttrs.metadata.marks.forEach(([length, markDefs]) => {
+            const text = thought.body.substring(cursor, cursor + length);
+            let marks = [];
+    
+            if (markDefs !== null) {
+              markDefs.forEach(markDef => {
+                if (markDef.type) {
+                  const markType = schema.marks[markDef.type];
+                  if (markType) {
+                    marks.push(markType.create(markDef.attrs));
+                  }
+                }
+              });
+    
+              content.push(schema.text(text, marks));
+            } else {
+              content.push(schema.text(text));
+            }
+            cursor += length; // Move the cursor forward
+          });
+    
+          // Handle any remaining text without marks
+          if (cursor < thought.body.length) {
+            content.push(schema.text(thought.body.substring(cursor)));
+          }
+        } else {
+          // If there are no marks, just create a text node with the entire body
+          content = [schema.text(thought.body)];
+        }
+    
+        return schema.nodes.thought.create(thoughtAttrs, content);
       } else {
         return schema.nodes.thought.create(thoughtAttrs);
       }
@@ -614,17 +666,6 @@ function App() {
       }
     };
   }, [loading]);
-
-  function extractThoughtTextFromPosition(doc: ProseMirrorNode, pos: number): string {
-    let textContent = "";
-    doc.nodesBetween(pos, pos, (node) => {
-      if (node.type.name === "thought") {
-        textContent = node.textContent;
-        return false; // Stop iterating once the first thought node is found
-      }
-    });
-    return textContent;
-  }
 
   function extractThoughtTexts(doc: ProseMirrorNode) {
     const texts: [string, string][] = []; // id, thought_body
@@ -729,7 +770,7 @@ function App() {
         </div>
       </div>
       <div className="flex-grow overflow-y-auto border border-solid border-[#e3ccfc]">
-        <div ref={editorRef} className="w-full h-full"></div> {/* Ensure the ref div fills its parent */}
+        <div ref={editorRef} className="w-full h-full p-1"></div> {/* Ensure the ref div fills its parent */}
       </div>
       <div className="flex justify-between items-center p-2 border-t border-slate-200">
         {" "}
