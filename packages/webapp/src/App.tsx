@@ -30,8 +30,8 @@ const removeHighlightOnInputPlugin = new Plugin({
   appendTransaction(transactions, oldState, newState) {
     let newTransaction: Transaction | null = null;
     let markAdded = false;
+    let consoleMsg = "";
     transactions.forEach((tr) => {
-      console.log("Inside appendTransaction, handling tr: ", tr);
       if (tr.docChanged) {
         // Loop through each step in the transaction
         tr.steps.forEach((step) => {
@@ -55,7 +55,7 @@ const removeHighlightOnInputPlugin = new Plugin({
             if (removeHighlight) {
               // If text was added in a highlight, create a transaction to remove the highlight mark
               const { from, to } = tr.selection;
-              console.log("Removing highlight from", from, to);
+              consoleMsg = `Removing highlight from ${from} ${to}`
               const mark = newState.schema.marks.highlight;
               if (newTransaction === null) {
                 newTransaction = newState.tr.removeMark(from - 1, to, mark);
@@ -70,6 +70,7 @@ const removeHighlightOnInputPlugin = new Plugin({
 
     // Only append transactions if we've actually created any
     if (newTransaction !== null && !markAdded) {
+      console.log(consoleMsg);
       return newTransaction;
     }
     return null;
@@ -182,7 +183,7 @@ function App() {
   const enterKeyPlugin = keymap({
     Enter: (state, dispatch) => {
       if (dispatch && state.selection.empty) {
-        const { tr } = state;
+        let { tr } = state;
 
         const newThoughtIndex = computeNewThoughtIndex(state);
         const thoughtNode = state.schema.nodes.thought.create({
@@ -218,17 +219,17 @@ function App() {
         const insertPos = tr.doc.resolve(position).after(1);
 
         // Insert the new thought node and move the selection
-        const newTr = tr.insert(insertPos, thoughtNode);
+        tr = tr.insert(insertPos, thoughtNode);
 
         // Calculate the position for the new selection
         // It should be within the newly inserted thought node, accounting for its start position
         const newPos = insertPos + 1; // Position inside the new thought node
 
         // Update the transaction with the new selection
-        newTr.setSelection(TextSelection.create(newTr.doc, newPos)).scrollIntoView();
+        tr.setSelection(TextSelection.create(tr.doc, newPos)).scrollIntoView();
 
         // Dispatch the updated transaction
-        dispatch(newTr);
+        dispatch(tr);
 
         // TODO: FIX ME
         // Not using database calls to compute next index because those are async and we need the index now
@@ -485,7 +486,7 @@ function App() {
         );
 
         if (thoughtNode) {
-          tr.insert(insertPos, thoughtNode);
+          tr.insert(insertPos, thoughtNode).scrollIntoView();
         }
       } else if (eventType === "UPDATE") {
         // Update the thought in the editor by replacing the node with updated content
@@ -715,17 +716,6 @@ function App() {
   }
 
   const insertTextAtCursor = (text: string) => {
-    if (editorViewRef.current) {
-      const { tr } = editorViewRef.current.state;
-      const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
-      if (!tr.selection.empty) tr.deleteSelection();
-      const position = tr.selection.from; // Insert position
-      const textNode = editorViewRef.current.state.schema.text(text);
-      tr.insert(position, textNode);
-      const endPosition = position + text.length;
-      tr.addMark(position, endPosition, highlightMark);
-      editorViewRef.current.dispatch(tr);
-    }
   };
 
   const generateThought = async () => {
@@ -754,14 +744,14 @@ function App() {
     const insertPos = tr.doc.resolve(position).after(1);
 
     // Insert the new thought node and move the selection
-    const newTr = tr.insert(insertPos, newThoughtNode);
+    tr = tr.insert(insertPos, newThoughtNode);
 
     // Calculate the position for the new selection
     // It should be within the newly inserted thought node, accounting for its start position
     const newPos = insertPos + 1; // Position inside the new thought node
 
     // Update the transaction with the new selection
-    newTr.setSelection(TextSelection.create(newTr.doc, newPos)).scrollIntoView();
+    tr.setSelection(TextSelection.create(tr.doc, newPos)).scrollIntoView();
     editorViewRef.current.dispatch(tr);
 
     // Prepare for LLM text generation
@@ -789,32 +779,36 @@ function App() {
       stream: true,
       onDelta: async (delta) => {
         if (delta) {
-          insertTextAtCursor(delta);
-
-          // After the LLM finishes generating the thought, mark it as needs handling
-          await new Promise((resolve) => setTimeout(resolve, 100)); // Wait a bit for all deltas to be processed
-
-          // Find the newly created thought node again
-          const { tr } = editorViewRef.current.state;
-          let pos = null;
-          tr.doc.descendants((node, position) => {
-            if (node.attrs.id === newThoughtId) {
-              pos = position;
-              return false; // Stop searching
+          if (editorViewRef.current) {
+            const { tr } = editorViewRef.current.state;
+            const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
+            if (!tr.selection.empty) tr.deleteSelection();
+            const position = tr.selection.from; // Insert position
+            const textNode = editorViewRef.current.state.schema.text(delta);
+            tr.insert(position, textNode);
+            const endPosition = position + delta.length;
+            tr.addMark(position, endPosition, highlightMark);
+            let pos = null;
+            tr.doc.descendants((node, position) => {
+              if (node.attrs.id === newThoughtId) {
+                pos = position;
+                return false; // Stop searching
+              }
+            });
+            if (pos !== null) {
+              const node = tr.doc.nodeAt(pos);
+              console.log("found node at position: ", position, node);
+              const metadata = node.attrs.metadata;
+              const newMetadata = { ...metadata, needs_handling: true };
+              tr.setNodeMarkup(pos, null, { ...node.attrs, metadata: newMetadata });
             }
-          });
-
-          if (pos !== null) {
-            // Update the thought to set needs_handling to true
-            const updatedNode = newThoughtNode.copy(newThoughtNode.content);
-            updatedNode.attrs.metadata.needs_handling = true;
-            tr.setNodeMarkup(pos, null, updatedNode.attrs, updatedNode.marks);
             editorViewRef.current.dispatch(tr);
           }
         }
       },
     };
     modelSelection === "GPT4" ? gpt4TurboChat(chatArgs) : huggingFaceChat(chatArgs);
+    // After the LLM finishes generating the thought, mark it as needs handling
     setThoughtIdsToUpdate((prev) => {
       return new Set(prev).add(newThoughtId);
     });
