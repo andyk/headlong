@@ -85,7 +85,7 @@ function App() {
   const [modelSelection, setModelSelection] = useState("GPT4");
   const [modelTemperature, setModelTemperature] = useState(0.5);
   const [envStatus, setEnvStatus] = useState("detached");
-  const [thoughtsIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
+  const [thoughtIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
 
   async function gpt4TurboChat(options: {
     messages: ChatCompletionMessageParam[];
@@ -161,25 +161,30 @@ function App() {
     return completion;
   }
 
+  function computeNewThoughtIndex(state: EditorState) {
+    // get the current thought id
+    const currentThoughtIndex: number = state.selection.$head.parent.attrs.index;
+    let nextThoughtIndex: number | null = null;
+
+    state.doc.descendants((node, pos) => {
+      if (node.type.name === "thought" && node.attrs.index > currentThoughtIndex) {
+        if (nextThoughtIndex === null || node.attrs.index < nextThoughtIndex) {
+          nextThoughtIndex = node.attrs.index;
+        }
+      }
+    });
+    const newThoughtIndex = nextThoughtIndex
+      ? (currentThoughtIndex + nextThoughtIndex) / 2.0
+      : currentThoughtIndex + 1.0;
+    return newThoughtIndex;
+  }
+
   const enterKeyPlugin = keymap({
     Enter: (state, dispatch) => {
       if (dispatch && state.selection.empty) {
         const { tr } = state;
-        // get the current thought id
-        const currentThoughtIndex: number = state.selection.$head.parent.attrs.index;
-        let nextThoughtIndex: number | null = null;
 
-        state.doc.descendants((node, pos) => {
-          if (node.type.name === "thought" && node.attrs.index > currentThoughtIndex) {
-            if (nextThoughtIndex === null || node.attrs.index < nextThoughtIndex) {
-              nextThoughtIndex = node.attrs.index;
-            }
-          }
-        });
-        const newThoughtIndex = nextThoughtIndex
-          ? (currentThoughtIndex + nextThoughtIndex) / 2.0
-          : currentThoughtIndex + 1.0;
-
+        const newThoughtIndex = computeNewThoughtIndex(state);
         const thoughtNode = state.schema.nodes.thought.create({
           id: uuidv4(),
           index: newThoughtIndex,
@@ -202,14 +207,8 @@ function App() {
             needs_handling: true,
             last_updated_by: APP_INSTANCE_ID,
           });
-          setThoughtIdsToUpdate((prev) => {
-            return new Set(prev).add(currentThoughtNode.attrs.id);
-          });
         } else {
           console.log("Not updating metadata.needs_handling for the last thought");
-          //console.log("currentThoughtPos", currentThoughtPos);
-          //console.log("currentThoughtNode", currentThoughtNode);
-          //console.log("isLastThought", isLastThought);
         }
 
         if (!tr.selection.empty) tr.deleteSelection();
@@ -226,7 +225,7 @@ function App() {
         const newPos = insertPos + 1; // Position inside the new thought node
 
         // Update the transaction with the new selection
-        newTr.setSelection(TextSelection.create(newTr.doc, newPos));
+        newTr.setSelection(TextSelection.create(newTr.doc, newPos)).scrollIntoView();
 
         // Dispatch the updated transaction
         dispatch(newTr);
@@ -241,7 +240,10 @@ function App() {
         //})();
 
         // Add a new thought to the Supabase database
-        addNewThoughtToDatabase(thoughtNode.attrs.id, "", selectedAgentName, newThoughtIndex);
+        //addNewThoughtToDatabase(thoughtNode.attrs.id, "", selectedAgentName, newThoughtIndex);
+        setThoughtIdsToUpdate((prev) => {
+          return new Set(prev).add(thoughtNode.attrs.id);
+        });
 
         return true;
       }
@@ -304,18 +306,18 @@ function App() {
 
   function pushToDB(idsToUpdate: Set<string>) {
     console.log("pushToDB called with isToUpdate: ", idsToUpdate);
-  
+
     if (!editorViewRef.current) {
       console.error("Editor view is not available.");
       return;
     }
-  
+
     const { doc } = editorViewRef.current.state;
-  
+
     idsToUpdate.forEach(async (id) => {
       let foundNode: ProseMirrorNode | null = null;
       let foundNodePos: number | null = null;
-  
+
       doc.descendants((node, pos) => {
         if (node.attrs.id === id) {
           foundNode = node;
@@ -323,14 +325,11 @@ function App() {
           return false; // Stop searching
         }
       });
-  
+
       if (foundNode === null || foundNodePos === null) {
         console.log(`Deleting thought with id ${id} from database.`);
-        const { error } = await supabase
-          .from(THOUGHTS_TABLE_NAME)
-          .delete()
-          .eq("id", id);
-  
+        const { error } = await supabase.from(THOUGHTS_TABLE_NAME).delete().eq("id", id);
+
         if (error) {
           console.error("Error deleting thought from database", error);
         } else {
@@ -339,51 +338,71 @@ function App() {
       } else {
         // Extract the text from the found node
         const thoughtText = foundNode.textContent;
-        
+
         // Extract marks using .toJSON() on each mark
         const marks = foundNode.content.content.reduce((acc, node) => {
           if (node.marks && node.marks.length > 0) {
-            const serializedMarks = node.marks.map(mark => mark.toJSON());
+            const serializedMarks = node.marks.map((mark) => mark.toJSON());
             acc.push([node.nodeSize, serializedMarks]);
           } else {
             acc.push([node.nodeSize, null]);
           }
           return acc;
         }, []);
-  
+
         console.log("marks: ", marks);
-        const { error } = await supabase
+        const { data: newThoughtRow, error } = await supabase
           .from(THOUGHTS_TABLE_NAME)
           .update({
+            index: foundNode.attrs.index,
+            body: thoughtText,
+            agent_name: selectedAgentName,
             metadata: {
               ...foundNode.attrs.metadata,
               last_updated_by: APP_INSTANCE_ID,
               marks,
             },
-            agent_name: selectedAgentName,
-            body: thoughtText,
           })
-          .eq("id", id);
-  
+          .eq("id", id)
+          .select()
+          .maybeSingle();
+
         if (error) {
           console.error("Error updating thought:", error);
+        } else if (newThoughtRow === null) {
+          // This is a new thought so update failed and we need to insert it
+          console.log(`Inserting new thought ${id} into database.`);
+          const { data, error } = await supabase.from(THOUGHTS_TABLE_NAME).insert([
+            {
+              id: id,
+              index: foundNode.attrs.index,
+              body: thoughtText,
+              agent_name: selectedAgentName,
+              metadata: { last_updated_by: APP_INSTANCE_ID, marks },
+            },
+          ]);
+          if (error) {
+            console.error("Error inserting new thought into database", error);
+          } else {
+            console.log(`Thought ${id} inserted successfully.`);
+          }
         } else {
           console.log(`Thought ${id} updated successfully.`);
         }
       }
     });
-  
+
     setThoughtIdsToUpdate(new Set());
   }
-  
+
   const throttlePushToDB = useMemo(() => throttle(pushToDB, 1000), []);
 
   useEffect(() => {
-    if (thoughtsIdsToUpdate.size === 0) {
+    if (thoughtIdsToUpdate.size === 0) {
       return;
     }
-    throttlePushToDB(thoughtsIdsToUpdate);
-  }, [thoughtsIdsToUpdate]);
+    throttlePushToDB(thoughtIdsToUpdate);
+  }, [thoughtIdsToUpdate]);
 
   useEffect(() => {
     const envPresenceRoom = supabase.channel("env_presence_room");
@@ -578,14 +597,14 @@ function App() {
         // Initialize an empty array to hold the content of the thought node
         let content = [];
         let cursor = 0; // A cursor to track our position as we apply marks
-    
+
         if (thoughtAttrs.metadata && thoughtAttrs.metadata.marks) {
           thoughtAttrs.metadata.marks.forEach(([length, markDefs]) => {
             const text = thought.body.substring(cursor, cursor + length);
             let marks = [];
-    
+
             if (markDefs !== null) {
-              markDefs.forEach(markDef => {
+              markDefs.forEach((markDef) => {
                 if (markDef.type) {
                   const markType = schema.marks[markDef.type];
                   if (markType) {
@@ -593,14 +612,14 @@ function App() {
                   }
                 }
               });
-    
+
               content.push(schema.text(text, marks));
             } else {
               content.push(schema.text(text));
             }
             cursor += length; // Move the cursor forward
           });
-    
+
           // Handle any remaining text without marks
           if (cursor < thought.body.length) {
             content.push(schema.text(thought.body.substring(cursor)));
@@ -609,7 +628,7 @@ function App() {
           // If there are no marks, just create a text node with the entire body
           content = [schema.text(thought.body)];
         }
-    
+
         return schema.nodes.thought.create(thoughtAttrs, content);
       } else {
         return schema.nodes.thought.create(thoughtAttrs);
@@ -709,41 +728,96 @@ function App() {
     }
   };
 
-  const generateThought = () => {
-    // Get list of thought texts from the editor
-    if (editorViewRef.current === null) {
+  const generateThought = async () => {
+    if (!editorViewRef.current) {
       return;
     }
+
+    // Generate a new thought ID and index
+    const newThoughtId = uuidv4(); // Assuming uuidv4() is available for generating unique IDs
+    const newThoughtIndex = computeNewThoughtIndex(editorViewRef.current.state);
+
+    const schema = editorViewRef.current.state.schema;
+    // Create a new thought without setting needs_handling yet
+    const newThoughtNode = schema.nodes.thought.create({
+      id: newThoughtId,
+      index: newThoughtIndex,
+      metadata: {}, // Initially empty or with other necessary initial metadata
+    }); // Assuming your schema has a 'thought' node and 'text' node
+
+    // Add the new thought to the editor state
+    let tr = editorViewRef.current.state.tr;
+    if (!tr.selection.empty) tr.deleteSelection();
+    const position = tr.selection.from; // Insert position
+
+    // Adjust the insertion position to after the current node
+    const insertPos = tr.doc.resolve(position).after(1);
+
+    // Insert the new thought node and move the selection
+    const newTr = tr.insert(insertPos, newThoughtNode);
+
+    // Calculate the position for the new selection
+    // It should be within the newly inserted thought node, accounting for its start position
+    const newPos = insertPos + 1; // Position inside the new thought node
+
+    // Update the transaction with the new selection
+    newTr.setSelection(TextSelection.create(newTr.doc, newPos)).scrollIntoView();
+    editorViewRef.current.dispatch(tr);
+
+    // Prepare for LLM text generation
     const thoughts = extractThoughtTexts(editorViewRef.current.state.doc);
     console.log("thoughts: ", thoughts);
-    // use editorView to get the thought id of the current selection
-    const currThoughtId = editorViewRef.current?.state.selection.$head.parent.attrs.id;
-    // create a new list from `thoughts` that only has thoughts up to and not including
-    // the thought with currThoughtId
+    const currThoughtId = newThoughtId; // Use the newly created thought ID
     const thoughtsAfterCurr = thoughts.slice(
       0,
       thoughts.findIndex(([id, _]) => id === currThoughtId)
     );
-    const sysMessage: ChatCompletionSystemMessageParam = {
+    const sysMessage = {
       role: "system",
       content: "Come up with the next thought based on the following stream of thoughts",
     };
-    const assistantMessages: ChatCompletionAssistantMessageParam[] = thoughtsAfterCurr.map(([id, body]) => {
-      return { role: "assistant", content: body };
-    });
+    const assistantMessages = thoughtsAfterCurr.map(([id, body]) => ({
+      role: "assistant",
+      content: body,
+    }));
     const messages = [sysMessage, ...assistantMessages];
     console.log("messages: ", messages);
+
     const chatArgs = {
       messages: messages,
       temperature: modelTemperature,
       stream: true,
-      onDelta: (delta) => {
+      onDelta: async (delta) => {
         if (delta) {
           insertTextAtCursor(delta);
+
+          // After the LLM finishes generating the thought, mark it as needs handling
+          await new Promise((resolve) => setTimeout(resolve, 100)); // Wait a bit for all deltas to be processed
+
+          // Find the newly created thought node again
+          const { tr } = editorViewRef.current.state;
+          let pos = null;
+          tr.doc.descendants((node, position) => {
+            if (node.attrs.id === newThoughtId) {
+              pos = position;
+              return false; // Stop searching
+            }
+          });
+
+          if (pos !== null) {
+            // Update the thought to set needs_handling to true
+            const updatedNode = newThoughtNode.copy(newThoughtNode.content);
+            updatedNode.attrs.metadata.needs_handling = true;
+            tr.setNodeMarkup(pos, null, updatedNode.attrs, updatedNode.marks);
+            editorViewRef.current.dispatch(tr);
+          }
         }
       },
     };
     modelSelection === "GPT4" ? gpt4TurboChat(chatArgs) : huggingFaceChat(chatArgs);
+    setThoughtIdsToUpdate((prev) => {
+      return new Set(prev).add(newThoughtId);
+    });
   };
 
   return (
@@ -760,8 +834,17 @@ function App() {
               <>
                 <span className="text-sm text-green-500">Environment</span>
                 {/* Online Icon */}
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-500" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.293a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-5 w-5 text-green-500"
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.293a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                    clipRule="evenodd"
+                  />
                 </svg>
               </>
             ) : (
@@ -769,7 +852,8 @@ function App() {
                 <span className="text-sm text-red-500">Environment</span>
                 {/* Offline Icon: Red circle (outline) with a red "X" */}
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="9" stroke="#ef4444" fill="none" strokeWidth="2" /> {/* Red outlined circle with black fill */}
+                  <circle cx="10" cy="10" r="9" stroke="#ef4444" fill="none" strokeWidth="2" />{" "}
+                  {/* Red outlined circle with black fill */}
                   <path stroke="#ef4444" strokeLinecap="round" strokeWidth="2" d="M6 6l8 8m0 -8l-8 8" /> {/* Red X */}
                 </svg>
               </>

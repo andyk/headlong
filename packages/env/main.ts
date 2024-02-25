@@ -60,7 +60,7 @@ const generateMessages = (thoughtList: Thought[]) => {
     role: "system",
     content: `your job is to consider your recent thoughts and then take an action.
 The way you take actions is by calling a function.
-If you don't think you know of any funcions that are appropriate for this action, you can say "observation: i don't know how to do that".
+If you don't think you know of any functions that are appropriate for this action, you can say "observation: i don't know how to do that".
 When deciding on what action take, use on the following stream of recent thoughts for context:`,
   };
   const thoughtListStr = thoughtList
