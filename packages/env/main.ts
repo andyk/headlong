@@ -399,13 +399,14 @@ const handleThought = async (thought: Thought) => {
   if (
     thought.body.toLowerCase().startsWith("action: ") &&
     thought.metadata !== null &&
-    thought.metadata["needs_handling"] === true
+    thought.metadata["needs_handling"] === true &&
+    typeof thought.metadata === "object"
   ) {
     console.log("Handling action: ", thought);
     // update the thought row to mark needs_handling as false
     const { data, error } = await supabase
       .from("thoughts")
-      .update({ metadata: { needs_handling: false, last_updated_by: ENV_INSTANCE_ID } })
+      .update({ metadata: { ...thought.metadata, needs_handling: false, last_updated_by: ENV_INSTANCE_ID } })
       .eq("id", thought.id)
       .eq("agent_name", agentName);
   } else {
