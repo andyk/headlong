@@ -281,18 +281,63 @@ function App() {
 
   const backspaceKeyPlugin = keymap({
     Backspace: (state, dispatch) => {
-      // Use the joinBackward command directly
-      // It returns true if it performed an action, false otherwise
-      const currThoughtId = state.selection.$head.parent.attrs.id;
-      console.log("backspacing while in thought id: ", currThoughtId);
-      const jbRes = joinTextblockBackward(state, dispatch);
-      // Remove the thought that is being deleted from the Supabase database
-      setThoughtIdsToUpdate((prev) => {
-        return new Set(prev).add(currThoughtId);
+      const { from, to } = state.selection;
+      console.log("backspacing from: ", from, " to: ", to);
+
+      // Collect all unique thought IDs within the selection range.
+      const thoughtIdsInSelection = new Set();
+      state.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.type.name === "thought" && node.attrs.id) {
+          thoughtIdsInSelection.add(node.attrs.id);
+        }
       });
-      return jbRes;
+  
+      // Check if it's just a cursor position without a selection range.
+      const isCursor = from === to;
+      if (isCursor) {
+        // Handle the case where it's just a cursor without a selection.
+        // Attempt to join with the previous block if at the start of a thought, or delete the previous character.
+        // Use joinTextblockBackward to try and merge this block with the previous block if applicable.
+        const result = joinTextblockBackward(state, dispatch);
+        if (result) {
+          return true;
+        }
+      } else {
+        console.log("Deleting a slice from within thoughts w/ IDs: ", Array.from(thoughtIdsInSelection));
+        // Here you can handle the deletion of thoughts by their IDs.
+        // For example, mark them for deletion in the database, update state, etc.
+        setThoughtIdsToUpdate((prev) => {
+          thoughtIdsInSelection.forEach(id => prev.add(id));
+          return new Set(prev);
+        });
+  
+        if (dispatch) {
+          // Create and dispatch a transaction that deletes the selected range.
+          const deleteTransaction = state.tr.delete(from, to);
+          dispatch(deleteTransaction);
+        }
+        
+        // Return true to indicate that the backspace handler has done something,
+        // preventing the default backspace behavior.
+        return true;
+      }
     },
   });
+  
+  //const backspaceKeyPlugin = keymap({
+  //  Backspace: (state, dispatch) => {
+  //    // Use the joinBackward command directly
+  //    // It returns true if it performed an action, false otherwise
+  //    const currThoughtId = state.selection.$head.parent.attrs.id;
+  //    console.log("backspacing while in thought id: ", currThoughtId);
+  //    const jbRes = joinTextblockBackward(state, dispatch);
+  //    // Remove the thought that is being deleted from the Supabase database
+  //    setThoughtIdsToUpdate((prev) => {
+  //      return new Set(prev).add(currThoughtId);
+  //    });
+  //    return jbRes;
+  //  },
+  //});
 
   const modAKeyplugin = keymap({
     "Mod-a": (state, dispatch) => {
