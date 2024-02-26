@@ -294,6 +294,42 @@ function App() {
     },
   });
 
+  const modAKeyplugin = keymap({
+    "Mod-a": (state, dispatch) => {
+      const { $from, $to } = state.selection;
+      let start = $from.before(1); // Get the start position of the current thought
+      let end = $to.after(1); // Get the end position of the current thought
+
+      if (start === undefined) {
+        // If the start is at the beginning of the document
+        start = 1;
+      }
+      if (end === undefined) {
+        // If the end is at the end of the document
+        end = state.doc.content.size - 1;
+      }
+
+      // Check if the selection spans across multiple thoughts
+      state.doc.nodesBetween(start, end, (node, pos) => {
+        if (node.type.name === "thought") {
+          // Adjust start and end to include the entire range of thoughts
+          if (pos < start) {
+            start = pos;
+          }
+          const nodeEnd = pos + node.nodeSize;
+          if (nodeEnd > end) {
+            end = nodeEnd;
+          }
+        }
+      });
+
+      if (dispatch) {
+        dispatch(state.tr.setSelection(TextSelection.create(state.doc, start, end)));
+      }
+      return true;
+    },
+  });
+
   async function addNewThoughtToDatabase(id: string, body: string, agentName: string, index: number) {
     const { data, error } = await supabase
       .from(THOUGHTS_TABLE_NAME)
@@ -671,6 +707,7 @@ function App() {
         enterKeyPlugin,
         ctrlEnterKeyPlugin,
         backspaceKeyPlugin,
+        modAKeyplugin,
         history(),
         keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo}),
       ],
