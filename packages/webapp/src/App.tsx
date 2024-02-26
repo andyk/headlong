@@ -492,13 +492,39 @@ function App() {
         // Update the thought in the editor by replacing the node with updated content
         state.doc.descendants((node, pos) => {
           if (node.type.name === "thought" && node.attrs.id === oldThought.id) {
+            console.log("updating thought in editor with metadata: ", newThought.metadata); 
             const updatedThoughtNode = state.schema.nodes.thought.createAndFill(
               {
                 id: newThought.id,
                 index: newThought.index,
                 metadata: newThought.metadata,
               },
-              state.schema.text(newThought.body)
+              // marks is an array of [length, markJSON] where markJSON is the serialized mark
+              // of length length or null if there are no marks for that range.
+              // create an array of text elements, each with the appropriate marks
+              newThought.metadata?.marks
+                ? newThought.metadata.marks.reduce((acc, [length, markDefs]) => {
+                    const text = newThought.body.substring(cursor, cursor + length);
+                    let marks = [];
+
+                    if (markDefs !== null) {
+                      markDefs.forEach((markDef) => {
+                        if (markDef.type) {
+                          const markType = state.schema.marks[markDef.type];
+                          if (markType) {
+                            marks.push(markType.create(markDef.attrs));
+                          }
+                        }
+                      });
+
+                      acc.push(state.schema.text(text, marks));
+                    } else {
+                      acc.push(state.schema.text(text));
+                    }
+                    cursor += length; // Move the cursor forward
+                    return acc;
+                  }, [])
+                : state.schema.text(newThought.body),
             );
 
             if (updatedThoughtNode) {
