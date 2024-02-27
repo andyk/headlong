@@ -22,11 +22,9 @@ import "prosemirror-view/style/prosemirror.css";
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
 const THOUGHTS_TABLE_NAME = "thoughts";
-const AGENTS_TABLE_NAME = "agents_reboot";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
 
 type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
-type Agent = Database["public"]["Tables"]["agents_reboot"]["Row"];
 
 const removeHighlightOnInputPlugin = new Plugin({
   appendTransaction(transactions, oldState, newState) {
@@ -83,7 +81,7 @@ function App() {
   const editorRef = useRef<HTMLElement>();
   const editorViewRef = useRef<EditorView | null>(null);
   const [selectedAgentName, setSelectedAgentName] = useState<string>("bilbo bossy baggins");
-  const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentNames, setAgentNames] = useState<string[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [loading, setLoading] = useState(true);
@@ -597,16 +595,15 @@ function App() {
   useEffect(() => {
     const fetchAgents = async () => {
       setLoadingAgents(true);
-      const { data, error } = await supabase
-        .from(AGENTS_TABLE_NAME)
-        .select("*")
-        .order("name", { ascending: true })
+
+      // Warning: 'distinct' doesn't work via the SDK, workaround with postgres function
+      const { data, error } = await supabase.rpc('get_agent_names')
 
       if (error) {
-        console.error("Error fetching agents:", error);
+        console.error("Error fetching agent names:", error);
         setLoadingAgents(false);
       } else {
-        setAgents(data || []);
+        setAgentNames(data || []);
         setLoadingAgents(false);
       }
     };
@@ -883,9 +880,9 @@ function App() {
             }
           }}
         >
-          {agents.map((agent) => (
-            <option key={agent.name} value={agent.name}>
-              {agent.name}
+          {agentNames.map((agentName) => (
+            <option key={agentName} value={agentName}>
+              {agentName}
             </option>
           ))}
         </select>
