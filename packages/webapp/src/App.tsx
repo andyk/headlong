@@ -80,7 +80,9 @@ const removeHighlightOnInputPlugin = new Plugin({
 function App() {
   const editorRef = useRef<HTMLElement>();
   const editorViewRef = useRef<EditorView | null>(null);
-  const [selectedAgentName] = useState<string>("bilbo bossy baggins");
+  const [selectedAgentName, setSelectedAgentName] = useState<string>("bilbo bossy baggins");
+  const [agentNames, setAgentNames] = useState<string[]>([]);
+  const [loadingAgents, setLoadingAgents] = useState(true);
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [loading, setLoading] = useState(true);
   const [modelSelection, setModelSelection] = useState("GPT4");
@@ -573,7 +575,7 @@ function App() {
         // Update the thought in the editor by replacing the node with updated content
         state.doc.descendants((node, pos) => {
           if (node.type.name === "thought" && node.attrs.id === oldThought.id) {
-            console.log("updating thought in editor with metadata: ", newThought.metadata); 
+            console.log("updating thought in editor with metadata: ", newThought.metadata);
             const updatedThoughtNode = state.schema.nodes.thought.createAndFill(
               {
                 id: newThought.id,
@@ -670,6 +672,25 @@ function App() {
 
     fetchThoughts();
   }, [selectedAgentName]);
+
+  useEffect(() => {
+    const fetchAgents = async () => {
+      setLoadingAgents(true);
+
+      // Warning: 'distinct' doesn't work via the SDK, workaround with postgres function
+      const { data, error } = await supabase.rpc('get_agent_names')
+
+      if (error) {
+        console.error("Error fetching agent names:", error);
+        setLoadingAgents(false);
+      } else {
+        setAgentNames(data || []);
+        setLoadingAgents(false);
+      }
+    };
+
+    fetchAgents();
+  }, []);
 
   useEffect(() => {
     if (!editorRef.current || loading) return; // Wait until thoughts are loaded
@@ -930,6 +951,23 @@ function App() {
           <rect x="23" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
           <rect x="36.5" y="33.5" width="11.5" height="9" style={{ fill: "#b87df9" }} />
         </svg>
+        <select
+          id="agent-selector"
+          className="bg-[#121212] border border-gray-600 px-2 m-2"
+          value={selectedAgentName}
+          onChange={(event) => {
+            const newAgentNameSelected = event.target.value;
+            if (newAgentNameSelected) {
+              setSelectedAgentName(newAgentNameSelected);
+            }
+          }}
+        >
+          {agentNames.map((agentName) => (
+            <option key={agentName} value={agentName}>
+              {agentName}
+            </option>
+          ))}
+        </select>
         <div className="flex-grow flex justify-end">
           <div className="flex items-center space-x-2 p-2 rounded-md">
             {envStatus === "attached" ? (

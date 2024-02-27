@@ -88,6 +88,24 @@ export type Database = {
         }
         Relationships: []
       }
+      agents_reboot: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
       jsos_normalize: {
         Row: {
           denormalized: string
@@ -285,15 +303,7 @@ export type Database = {
           metadata?: Json | null
           processed_at?: string | null
         }
-        Relationships: [
-          {
-            foreignKeyName: "public_thoughts_agent_name_fkey"
-            columns: ["agent_name"]
-            isOneToOne: false
-            referencedRelation: "agents"
-            referencedColumns: ["name"]
-          }
-        ]
+        Relationships: []
       }
       thoughts_new_old: {
         Row: {
@@ -357,11 +367,45 @@ export type Database = {
           }
         ]
       }
+      thoughts_test_bilbo_import: {
+        Row: {
+          agent_name: string
+          body: string
+          created_at: string
+          id: string
+          index: number
+          metadata: Json | null
+          processed_at: string | null
+        }
+        Insert: {
+          agent_name: string
+          body?: string
+          created_at?: string
+          id?: string
+          index: number
+          metadata?: Json | null
+          processed_at?: string | null
+        }
+        Update: {
+          agent_name?: string
+          body?: string
+          created_at?: string
+          id?: string
+          index?: number
+          metadata?: Json | null
+          processed_at?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      get_agent_names: {
+        Args: Record<PropertyKey, never>
+        Returns: string[]
+      }
       get_hashes: {
         Args: {
           hashes: string[]
