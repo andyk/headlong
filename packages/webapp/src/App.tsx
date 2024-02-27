@@ -52,7 +52,7 @@ const removeHighlightOnInputPlugin = new Plugin({
             if (removeHighlight) {
               // If text was added in a highlight, create a transaction to remove the highlight mark
               const { from, to } = tr.selection;
-              consoleMsg = `Removing highlight from ${from} ${to}`
+              consoleMsg = `Removing highlight from ${from} ${to}`;
               const mark = newState.schema.marks.highlight;
               if (newTransaction === null) {
                 newTransaction = newState.tr.removeMark(from - 1, to, mark);
@@ -86,6 +86,8 @@ function App() {
   const [modelTemperature, setModelTemperature] = useState(0.5);
   const [envStatus, setEnvStatus] = useState("detached");
   const [thoughtIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
+  const [generatingLoopOn, setGeneratingLoopOn] = useState(false); // Use this to control the generation loop
+  const [generationTrigger, setGenerationTrigger] = useState(0);
 
   // Put userMessage before/after each assistantMessage and append sysMessage (if given) to the beginning
   // [assist0, assist1, assist2] -> [sys, user, assist0, user, assist1, user]
@@ -133,30 +135,31 @@ function App() {
     assistantMessages: string[];
     max_tokens?: number;
     temperature?: number;
-    stream?: boolean; // Add stream option
-    onDelta: (delta: any) => void; // Callback to handle incoming data
-  }) {  
-    // Assuming the OpenAI SDK has an event emitter or callback mechanism for streaming
-    const allMessageParams = promptedThoughtStream(options.sysMessage, options.userMessage, options.assistantMessages);
-    // Old version
-    // const allMessageParams  =
-    //   [{role: 'system', content: options.sysMessage}]
-    //   + options.assistantMessages.map(message  => ({ role: 'assistant' , content: message }));
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4-1106-preview",
-      messages: allMessageParams as ChatCompletionMessageParam[],
-      max_tokens: options.max_tokens ?? 100,
-      temperature: options.temperature ?? 0.5,
-      stream: options.stream ?? true,
+    stream?: boolean;
+    onDelta: (delta: any) => void;
+  }): Promise<any> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const allMessageParams = promptedThoughtStream(options.sysMessage, options.userMessage, options.assistantMessages);
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4-1106-preview",
+          messages: allMessageParams as ChatCompletionMessageParam[],
+          max_tokens: options.max_tokens ?? 100,
+          temperature: options.temperature ?? 0.5,
+          stream: options.stream ?? true,
+        });
+        const stream = completion as AsyncIterable<any>;
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content || "";
+          options.onDelta(delta); // Invoke the callback with the incoming delta
+        }
+        console.log("DONE awaiting all chunks")
+
+        resolve(completion); // Resolve the promise after the stream is fully processed
+      } catch (error) {
+        reject(error); // Reject the promise if there's an error
+      }
     });
-
-    const stream = completion as AsyncIterable<any>;
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content || "";
-      options.onDelta(delta); // Invoke the callback with the incoming delta
-    }
-
-    return completion;
   }
 
   async function huggingFaceChat(options: {
@@ -330,6 +333,7 @@ function App() {
 
   const backspaceKeyPlugin = keymap({
     Backspace: (state, dispatch) => {
+      let retVal = false;
       const { from, to } = state.selection;
       console.log("backspacing from: ", from, " to: ", to);
 
@@ -349,17 +353,13 @@ function App() {
         // Use joinTextblockBackward to try and merge this block with the previous block if applicable.
         const result = joinTextblockBackward(state, dispatch);
         if (result) {
-          return true;
+          retVal = true;
         }
       } else {
         console.log("Deleting a slice from within thoughts w/ IDs: ", Array.from(thoughtIdsInSelection));
         // Here you can handle the deletion of thoughts by their IDs.
         // For example, mark them for deletion in the database, update state, etc.
-        setThoughtIdsToUpdate((prev) => {
-          thoughtIdsInSelection.forEach(id => prev.add(id));
-          return new Set(prev);
-        });
-  
+ 
         if (dispatch) {
           // Create and dispatch a transaction that deletes the selected range.
           const deleteTransaction = state.tr.delete(from, to);
@@ -368,8 +368,16 @@ function App() {
         
         // Return true to indicate that the backspace handler has done something,
         // preventing the default backspace behavior.
-        return true;
+        retVal = true;
       }
+      if (thoughtIdsInSelection.size === 0 || retVal === false) {
+        return false;
+      }
+      setThoughtIdsToUpdate((prev) => {
+        thoughtIdsInSelection.forEach(id => prev.add(id));
+        return new Set(prev);
+      });
+      return true;
     },
   });
   
@@ -423,17 +431,6 @@ function App() {
       return true;
     },
   });
-
-  async function addNewThoughtToDatabase(id: string, body: string, agentName: string, index: number) {
-    const { data, error } = await supabase
-      .from(THOUGHTS_TABLE_NAME)
-      .insert([{ id: id, index: index, body: body, agent_name: agentName }]);
-    if (error) {
-      console.error("Error adding new thought to database", error);
-    } else {
-      console.log("Added new thought to database ", id);
-    }
-  }
 
   function pushToDB(idsToUpdate: Set<string>) {
     console.log("pushToDB called with isToUpdate: ", idsToUpdate);
@@ -654,7 +651,7 @@ function App() {
                     cursor += length; // Move the cursor forward
                     return acc;
                   }, [])
-                : state.schema.text(newThought.body),
+                : state.schema.text(newThought.body)
             );
 
             if (updatedThoughtNode) {
@@ -822,7 +819,7 @@ function App() {
         backspaceKeyPlugin,
         modAKeyplugin,
         history(),
-        keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo}),
+        keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }),
       ],
     });
 
@@ -891,13 +888,18 @@ function App() {
     return texts;
   }
 
-  const insertTextAtCursor = (text: string) => {
-  };
+  useEffect(() => {
+    if (generatingLoopOn) {
+      console.log("in gnerationTrigger useEffect");
+      generateThought();
+    }
+  }, [generatingLoopOn, generationTrigger]); // This effect depends on generatingOn, re-run when it changes
 
   const generateThought = async () => {
     if (!editorViewRef.current) {
       return;
     }
+    console.log("handling generateThought");
 
     // Generate a new thought ID and index
     const newThoughtId = uuidv4(); // Assuming uuidv4() is available for generating unique IDs
@@ -913,21 +915,11 @@ function App() {
 
     // Add the new thought to the editor state
     let tr = editorViewRef.current.state.tr;
-    if (!tr.selection.empty) tr.deleteSelection();
-    const position = tr.selection.from; // Insert position
-
     // Adjust the insertion position to after the current node
-    const insertPos = tr.doc.resolve(position).after(1);
+    const endOfDocPos = tr.doc.content.size;
+    // Insert the new thought node
+    tr = tr.insert(endOfDocPos, newThoughtNode);
 
-    // Insert the new thought node and move the selection
-    tr = tr.insert(insertPos, newThoughtNode);
-
-    // Calculate the position for the new selection
-    // It should be within the newly inserted thought node, accounting for its start position
-    const newPos = insertPos + 1; // Position inside the new thought node
-
-    // Update the transaction with the new selection
-    tr.setSelection(TextSelection.create(tr.doc, newPos)).scrollIntoView();
     editorViewRef.current.dispatch(tr);
 
     // Prepare for LLM text generation
@@ -937,10 +929,13 @@ function App() {
     const currThoughtId = newThoughtId; // Use the newly created thought ID
     // create a new list from `thoughts` that only has thoughts up to and including
     // the thought with currThoughtId
-    const thoughtsAfterCurr = thoughts.slice(0, thoughts.findIndex(([id, _]) => id === currThoughtId) + 1);
+    const thoughtsBeforeCurr = thoughts.slice(
+      0,
+      thoughts.findIndex(([id, _]) => id === currThoughtId)
+    );
     const sysMessage = "You are going to do some thinking on your own. Try to be conscious of your own thoughts so you can tell them to me one by one.";
     const userMessage = "What is your next thought?";
-    const assistantMessages: string[] = thoughtsAfterCurr.map(([_, body]) => {return body;});
+    const assistantMessages: string[] = thoughtsBeforeCurr.map(([_, body]) => {return body;});
     console.log("Assistant Messages: ", assistantMessages);
     const chatArgs = {
       sysMessage: sysMessage,
@@ -949,40 +944,59 @@ function App() {
       temperature: modelTemperature,
       stream: true,
       onDelta: async (delta) => {
-        if (delta) {
-          if (editorViewRef.current) {
-            const { tr } = editorViewRef.current.state;
-            const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
-            if (!tr.selection.empty) tr.deleteSelection();
-            const position = tr.selection.from; // Insert position
-            const textNode = editorViewRef.current.state.schema.text(delta);
-            tr.insert(position, textNode);
-            const endPosition = position + delta.length;
-            tr.addMark(position, endPosition, highlightMark);
-            let pos = null;
-            tr.doc.descendants((node, position) => {
-              if (node.attrs.id === newThoughtId) {
-                pos = position;
-                return false; // Stop searching
-              }
-            });
-            if (pos !== null) {
-              const node = tr.doc.nodeAt(pos);
-              console.log("found node at position: ", position, node);
-              const metadata = node.attrs.metadata;
-              const newMetadata = { ...metadata, needs_handling: true };
-              tr.setNodeMarkup(pos, null, { ...node.attrs, metadata: newMetadata });
+        if (delta && editorViewRef.current) {
+          const tr = editorViewRef.current.state.tr;
+    
+          let lastThoughtPos = null;
+          let lastThought = null;
+
+          // Iterate through the document to find the last 'thought' node
+          tr.doc.descendants((node, pos) => {
+            if (node.type.name === "thought") {
+              lastThoughtPos = pos;
+              lastThought = node;
             }
-            editorViewRef.current.dispatch(tr);
+          });
+    
+          if (lastThoughtPos === null) {
+            console.log("No 'thought' node found in the document.");
+            return;
           }
+
+          // Create a text node with the delta content
+          const textNode = editorViewRef.current.state.schema.text(delta);
+          let insertPos = lastThoughtPos as number + lastThought.nodeSize - 1;
+    
+          // Insert the delta text at the end of the last thought
+          tr.insert(insertPos, textNode);
+    
+          // Apply highlight mark if needed
+          const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
+          tr.addMark(insertPos, insertPos + delta.length, highlightMark);
+    
+          editorViewRef.current.dispatch(tr);
         }
       },
     };
-    modelSelection === "GPT4" ? gpt4TurboChat(chatArgs) : huggingFaceChat(chatArgs);
-    // After the LLM finishes generating the thought, mark it as needs handling
+    modelSelection === "GPT4" ? await gpt4TurboChat(chatArgs) : await huggingFaceChat(chatArgs);
+    // After the new text is fully generated by the LLM, mark the new thought as needs_handling = true
+    let pos = null;
+    tr.doc.descendants((node, position) => {
+      if (node.attrs.id === newThoughtId) {
+        pos = position;
+        return false; // Stop searching
+      }
+    });
+    if (pos !== null) {
+      const node = tr.doc.nodeAt(pos);
+      const metadata = node.attrs.metadata;
+      const newMetadata = { ...metadata, needs_handling: true };
+      tr.setNodeMarkup(pos, null, { ...node.attrs, metadata: newMetadata });
+    }
     setThoughtIdsToUpdate((prev) => {
       return new Set(prev).add(newThoughtId);
     });
+    setTimeout(() => { setGenerationTrigger((prev) => prev + 1); }, 2000);
   };
 
   return (
@@ -1047,11 +1061,66 @@ function App() {
         <div ref={editorRef} className="w-full h-full p-1"></div> {/* Ensure the ref div fills its parent */}
       </div>
       <div className="flex justify-between items-center p-2 border-t border-slate-200">
-        {" "}
-        {/* Use p-2 for padding and bg-gray-100 for a light background */}
-        <button className="bg-blue-500 text-white py-1 px-2 rounded-md" onClick={generateThought}>
-          Generate
-        </button>
+        <div className="flex items-center space-x-2">
+          {/* Use p-2 for padding and bg-gray-100 for a light background */}
+          <button className="bg-blue-500 text-white py-2 px-4 rounded-md" onClick={generateThought}>
+            Generate Thought
+          </button>
+          <button
+            className={generatingLoopOn ? (
+              "bg-red-500 text-white py-2 px-4 rounded mx-2"
+            ) : (
+              "bg-blue-500 text-white py-2 px-4 rounded mx-2"
+            )}
+          onClick={ () => {
+            setGeneratingLoopOn(currVal => {
+              console.log("setting generatingLoopOn to ", !currVal)
+              return !currVal;
+            });
+          }}>
+            {generatingLoopOn ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path fill="#FFFFFF" d="M6 4h4v16H6z" />
+                <path fill="#FFFFFF" d="M14 4h4v16h-4z" />
+              </svg> // Pause icon
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6" 
+                fill="currentColor"
+                viewBox="2 5 20 14" 
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8 5v14l11-7z"
+                />
+              </svg>
+            )}
+          </button>
+          {/* 
+          <label htmlFor="lockScrollToBottom" className="flex items-center space-x-1">
+            <input
+              type="checkbox"
+              id="lockScrollToBottom"
+              checked={lockScrollToBottom}
+              onChange={(e) => {
+                console.log("setting lockScrollToBottom to ", e.target.checked)
+                return setLockScrollToBottom(e.target.checked)
+              }}
+            />
+            <span>Lock to bottom</span>
+          </label>
+          */}
+        </div>
         <div className="flex items-center">
           {import.meta.env.VITE_HF_API_KEY && import.meta.env.VITE_HF_LLAMA_ENDPOINT && (
             <>
