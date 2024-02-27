@@ -166,7 +166,7 @@ function App() {
     stream?: boolean; // Add stream option
     onDelta: (delta: any) => void; // Callback to handle incoming data
   }) {
-    const includeSysMessage = false;
+    const includeSysMessage = true;
     const templatedChat =
       tokenizer.apply_chat_template(
         promptedThoughtStream(
@@ -177,7 +177,10 @@ function App() {
           add_generation_prompt: false,
           return_tensor: false,
         });
-    const templatedChat2 = getLlamaTemplatedChat(options.sysMessage, options.userMessage, options.assistantMessages)
+    const templatedChat2 = getLlamaTemplatedChat(
+      includeSysMessage ? options.sysMessage : "",
+      options.userMessage,
+      options.assistantMessages)
     console.log("templates match ", templatedChat == templatedChat2);
 
     const completion = hf.textGenerationStream({
