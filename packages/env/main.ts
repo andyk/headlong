@@ -410,7 +410,7 @@ const handleThought = async (thought: Thought) => {
       .eq("id", thought.id)
       .eq("agent_name", agentName);
   } else {
-    console.log("exiting handleThought since this isn't an ACTION or it doesn't *needs_handling*: ", thought);
+    console.log("exiting handleThought since this isn't an ACTION or it doesn't *needs_handling*\n--");
     return;
   }
   console.log("handling an ACTION that *needs_handling*: ", thought.body);
