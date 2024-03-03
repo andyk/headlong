@@ -279,7 +279,6 @@ const tools = {
         parameters: {
           type: "object",
           properties: {},
-          },
         },
       },
     },
