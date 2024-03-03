@@ -87,6 +87,15 @@ function whichShellActive() {
   }
 }
 
+function listShells() {
+  const shellIDs = Object.keys(env.shells);
+  if (shellIDs.length === 0) {
+    writeToSockets('observation: there are no shells open.');
+  } else {
+    writeToSockets(`observation: open shells: ${shellIDs.join(', ')}`);
+  }
+}
+
 server.on('connection', (socket) => {
   console.log('bashServer: client connected');
   sockets.push(socket);
@@ -107,6 +116,9 @@ server.on('connection', (socket) => {
         break;
       case 'whichShellActive':
         whichShellActive();
+        break;
+      case 'listShells':
+        listShells();
         break;
       default:
         console.log('received unrecognized type from client:', type);

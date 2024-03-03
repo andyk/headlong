@@ -262,6 +262,28 @@ const tools = {
       },
     },
   },
+  listShells: {
+    execute: async (args: object, addThought: (thought: string) => void) => {
+      bashServerClient.write(
+        JSON.stringify({
+          type: "listShells",
+          payload: {},
+        })
+      );
+    },
+    schema: {
+      type: "function" as "function",
+      function: {
+        name: "listShells",
+        description: "list the ids of all currently open shells",
+        parameters: {
+          type: "object",
+          properties: {},
+          },
+        },
+      },
+    },
+  },
   sendText: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       if (args["to"] !== "+15103567082") {

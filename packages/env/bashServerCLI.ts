@@ -36,6 +36,8 @@ function askQuestion() {
                 msg = {type: 'switchToShell', payload: {id: args}};
             } else if (commandType === 'whichShellActive' || commandType === 'w') {
                 msg = {type: 'whichShellActive', payload: {}};
+            } else if (commandType === 'listShells' || commandType === 'l') {
+                msg = {type: 'listShells', payload: {}};
             } else if (commandType === 'exit' || commandType === 'e') {
                 process.exit(0);
             } else { 
