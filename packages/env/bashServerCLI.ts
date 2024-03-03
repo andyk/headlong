@@ -17,7 +17,7 @@ client.on('data', (data) => {
 });
 
 function askQuestion() {
-    rl.question('Enter command type (n, c, s, w, e) and args (if any):\n', (input) => {
+    rl.question('Enter command type ([n]ewShell, run[C]ommand, [s]witchToShell, [w]hichShellActive, e[x]it, [l]istShells) and args (if any):\n', (input) => {
         try {
             if (input === '') {
                 askQuestion();
@@ -30,15 +30,15 @@ function askQuestion() {
                     {type: 'newShell', payload: {shellID: args[0]}}
                 :
                     msg = {type: 'newShell', payload: {}};
-            } else if (commandType === 'runCommand' || commandType === 'c') {
+            } else if (commandType === 'runCommand' || commandType.toLowerCase() === 'c') {
                 msg = {type: 'runCommand', payload: {command: new String(args.join(' '))}};
-            } else if (commandType === 'switchToShell' || commandType === 's') {
+            } else if (commandType === 'switchToShell' || commandType.toLowerCase() === 's') {
                 msg = {type: 'switchToShell', payload: {id: args}};
-            } else if (commandType === 'whichShellActive' || commandType === 'w') {
+            } else if (commandType === 'whichShellActive' || commandType.toLowerCase() === 'w') {
                 msg = {type: 'whichShellActive', payload: {}};
-            } else if (commandType === 'listShells' || commandType === 'l') {
+            } else if (commandType === 'listShells' || commandType.toLowerCase() === 'l') {
                 msg = {type: 'listShells', payload: {}};
-            } else if (commandType === 'exit' || commandType === 'e') {
+            } else if (commandType === 'exit' || commandType.toLowerCase() === 'x') {
                 process.exit(0);
             } else { 
                 console.log("unrecognized command type: ", commandType);
