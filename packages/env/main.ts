@@ -8,9 +8,9 @@ import twilioSDK from "twilio";
 import net from "net";
 import supabase from "./supabase";
 import { v4 as uuidv4 } from "uuid";
-import { Dawindowase } from "./dawindowase.types";
+import { Database } from "./database.types";
 
-type Thought = Dawindowase["public"]["Windowles"]["thoughts"]["Row"];
+type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
 
 const ENV_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
 
