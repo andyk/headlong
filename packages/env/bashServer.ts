@@ -1,11 +1,15 @@
 import { createServer, Socket } from 'net';
 import { IPty, spawn } from 'node-pty'; // Import spawn from node-pty
+import { throttle } from 'lodash';
+
+const REFRESH_RATE = 2000; // in milliseconds
 
 const bashServerPort = Number(process.env.BASH_SERVER_PORT) || 3031;
 
 interface Window {
   proc: IPty;
-  history: string;
+  history: string[];  // history of window that has already been sent.
+  outputBuffer: string[];  // buffered output yet to be sent.
 }
 
 interface Env {
@@ -28,6 +32,29 @@ function writeToSockets(msg: string) {
   });
 }
 
+function pushNewOutputs() {
+  Object.entries(env.windows).forEach(([id, window]) => {
+    if (window.outputBuffer.length > 0) {
+      writeToSockets(`observation: window ${id}:\n${window.outputBuffer.join('')}`);
+      // apppend outputBuffer to history for this window and clear outputBUffer
+      window.history.push(...window.outputBuffer);
+      window.outputBuffer = [];
+    }
+  });
+};
+
+// Throttle the function to send updates to sockets
+const throttledPushNewOutputs = throttle(() => {
+  pushNewOutputs();
+}, REFRESH_RATE);
+
+function addOutputToBuffer(windowID: string, data: string) {
+  if (env.windows[windowID]) {
+    env.windows[windowID].outputBuffer.push(data);
+    throttledPushNewOutputs();
+  }
+}
+
 function newWindow(payload: any) {
   const { windowID, shellPath: shellPath = '/bin/bash', shellArgs: shellArgs = [] } = payload;
   const id = windowID || `window-${Math.random().toString(36).substring(7)}`;
@@ -39,7 +66,8 @@ function newWindow(payload: any) {
       cwd: process.cwd(),
       env: process.env,
     }),
-    history: '',
+    history: [],
+    outputBuffer: [],
   };
   env.activeWindowID = id;
 
@@ -47,7 +75,7 @@ function newWindow(payload: any) {
 
   // Relay messages from the subprocess to the socket
   env.windows[id].proc.onData((data) => {
-    writeToSockets(`observation: window ${id}:\n${data}`);
+    addOutputToBuffer(id, data);
   });
 
   env.windows[id].proc.onExit(({ exitCode, signal }) => {
