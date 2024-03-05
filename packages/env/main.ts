@@ -483,7 +483,7 @@ supabase
     {
       event: "*",
       schema: "public",
-      windowle: "thoughts",
+      table: "thoughts",
     },
     async (payload) => {
       console.log("Got a new thought: ", payload.new);
