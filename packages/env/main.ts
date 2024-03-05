@@ -283,6 +283,27 @@ const tools = {
       },
     },
   },
+  whichWindowActive: {
+    execute: async (args: object, addThought: (thought: string) => void) => {
+      bashServerClient.write(
+        JSON.stringify({
+          type: "whichWindowActive",
+          payload: {},
+        })
+      );
+    },
+    schema: {
+      type: "function" as "function",
+      function: {
+        name: "whichWindowActive",
+        description: "get the id of the currently active window",
+        parameters: {
+          type: "object",
+          properties: {},
+        },
+      },
+    },
+  },
   sendText: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       if (args["to"] !== "+15103567082") {
@@ -506,7 +527,6 @@ const envPresenceRoom = supabase.channel("env_presence_room", {
 envPresenceRoom
   .on("presence", { event: "sync" }, () => {
     const newState = envPresenceRoom.presenceState();
-    console.log('env_presence_room got a "sync" update: ', newState);
   })
   .on("presence", { event: "join" }, ({ key, newPresences }) => {
     console.log("env_presence_room had a join", key, newPresences);
