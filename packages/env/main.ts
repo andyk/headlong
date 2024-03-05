@@ -8,9 +8,9 @@ import twilioSDK from "twilio";
 import net from "net";
 import supabase from "./supabase";
 import { v4 as uuidv4 } from "uuid";
-import { Database } from "./database.types";
+import { Dawindowase } from "./dawindowase.types";
 
-type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
+type Thought = Dawindowase["public"]["Windowles"]["thoughts"]["Row"];
 
 const ENV_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
 
@@ -168,13 +168,13 @@ const tools = {
       },
     },
   },
-  newShell: {
+  newWindow: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       bashServerClient.write(
         JSON.stringify({
-          type: "newShell",
+          type: "newWindow",
           payload: {
-            shellID: args["shellID"],
+            windowID: args["windowID"],
             shellPath: args["shellPath"],
             shellArgs: args["shellArgs"],
           },
@@ -184,37 +184,37 @@ const tools = {
     schema: {
       type: "function" as "function",
       function: {
-        name: "newShell",
-        description: "create a new shell",
+        name: "newWindow",
+        description: "create a new window in the terminal.",
         parameters: {
           type: "object",
           properties: {
-            shellBinary: {
+            shellPath: {
               type: "string",
               default: "/bin/bash",
-              description: "path of shell binary, e.g. /bin/bash",
+              description: "path of shell binary to open in the new terminal shell, e.g. /bin/bash",
             },
             shellArgs: {
               type: "array",
               items: {
                 type: "string",
               },
-              description: "arguments to pass to the shell binary",
+              description: "arguments to pass to the shell binary that will be opened in the new shell",
             },
-            shellID: {
+            windowID: {
               type: "string",
-              description: "unique ID for the new shell",
+              description: "unique ID for the new window",
             },
           },
         },
       },
     },
   },
-  switchToShell: {
+  switchToWindow: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       bashServerClient.write(
         JSON.stringify({
-          type: "switchToShell",
+          type: "switchToWindow",
           payload: { id: args["id"] },
         })
       );
@@ -222,21 +222,21 @@ const tools = {
     schema: {
       type: "function" as "function",
       function: {
-        name: "switchToShell",
-        description: "switch to the specified shell, i.e. 'bring it to the front'",
+        name: "switchToWindow",
+        description: "switch to the specified window, i.e. 'bring it to the front'",
         parameters: {
           type: "object",
           properties: {
             id: {
               type: "string",
-              description: "the ID of the shell to switch to",
+              description: "the ID of the window to switch to",
             },
           },
         },
       },
     },
   },
-  executeShellCommand: {
+  executeWindowCommand: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       bashServerClient.write(
         JSON.stringify({
@@ -248,25 +248,25 @@ const tools = {
     schema: {
       type: "function" as "function",
       function: {
-        name: "executeShellCommand",
-        description: "run a command in the currently active shell",
+        name: "executeWindowCommand",
+        description: "run a command in the currently active window",
         parameters: {
           type: "object",
           properties: {
             command: {
               type: "string",
-              description: "the shell command to execute in the active shell",
+              description: "the window command to execute in the active window",
             },
           },
         },
       },
     },
   },
-  listShells: {
+  listWindows: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       bashServerClient.write(
         JSON.stringify({
-          type: "listShells",
+          type: "listWindows",
           payload: {},
         })
       );
@@ -274,8 +274,8 @@ const tools = {
     schema: {
       type: "function" as "function",
       function: {
-        name: "listShells",
-        description: "list the ids of all currently open shells",
+        name: "listWindows",
+        description: "list the ids of all currently open windows",
         parameters: {
           type: "object",
           properties: {},
@@ -378,7 +378,7 @@ async function computeInsertIndex(insertAfterIndex: number) {
 async function addNewThought(agentName: string, body: string, addAfterIndex?: number) {
   console.log("adding thought: ", body, " after index: ", addAfterIndex);
   if (addAfterIndex === undefined) {
-    // get max index from thoughts table
+    // get max index from thoughts windowle
     const { data: row, error } = await supabase
       .from("thoughts")
       .select("index")
@@ -475,7 +475,7 @@ const handleThought = async (thought: Thought) => {
   }
 };
 
-// use supabase client `supabase` to subscribe to the thoughts table
+// use supabase client `supabase` to subscribe to the thoughts windowle
 supabase
   .channel("any")
   .on<Thought>(
@@ -483,7 +483,7 @@ supabase
     {
       event: "*",
       schema: "public",
-      table: "thoughts",
+      windowle: "thoughts",
     },
     async (payload) => {
       console.log("Got a new thought: ", payload.new);

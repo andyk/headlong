@@ -17,7 +17,7 @@ client.on('data', (data) => {
 });
 
 function askQuestion() {
-    rl.question('Enter command type ([n]ewShell, run[C]ommand, [s]witchToShell, [w]hichShellActive, e[x]it, [l]istShells) and args (if any):\n', (input) => {
+    rl.question('Enter command type ([n]ewWindow, run[C]ommand, [s]witchToWindow, [w]hichWindowActive, e[x]it, [l]istWindows) and args (if any):\n', (input) => {
         try {
             if (input === '') {
                 askQuestion();
@@ -25,19 +25,19 @@ function askQuestion() {
             }
             const [commandType, ...args] = input.split(' ');
             let msg;
-            if (commandType === 'newShell' || commandType === 'n') {
+            if (commandType === 'newWindow' || commandType === 'n') {
                 msg = args.length === 1 ?
-                    {type: 'newShell', payload: {shellID: args[0]}}
+                    {type: 'newWindow', payload: {windowID: args[0]}}
                 :
-                    msg = {type: 'newShell', payload: {}};
+                    msg = {type: 'newWindow', payload: {}};
             } else if (commandType === 'runCommand' || commandType.toLowerCase() === 'c') {
                 msg = {type: 'runCommand', payload: {command: new String(args.join(' '))}};
-            } else if (commandType === 'switchToShell' || commandType.toLowerCase() === 's') {
-                msg = {type: 'switchToShell', payload: {id: args}};
-            } else if (commandType === 'whichShellActive' || commandType.toLowerCase() === 'w') {
-                msg = {type: 'whichShellActive', payload: {}};
-            } else if (commandType === 'listShells' || commandType.toLowerCase() === 'l') {
-                msg = {type: 'listShells', payload: {}};
+            } else if (commandType === 'switchToWindow' || commandType.toLowerCase() === 's') {
+                msg = {type: 'switchToWindow', payload: {id: args}};
+            } else if (commandType === 'whichWindowActive' || commandType.toLowerCase() === 'w') {
+                msg = {type: 'whichWindowActive', payload: {}};
+            } else if (commandType === 'listWindows' || commandType.toLowerCase() === 'l') {
+                msg = {type: 'listWindows', payload: {}};
             } else if (commandType === 'exit' || commandType.toLowerCase() === 'x') {
                 process.exit(0);
             } else { 
