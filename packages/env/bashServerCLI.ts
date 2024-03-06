@@ -17,7 +17,7 @@ client.on('data', (data) => {
 });
 
 function askQuestion() {
-    rl.question('Enter command type ([n]ewWindow, run[C]ommand, [s]witchToWindow, [w]hichWindowActive, e[x]it, [l]istWindows) and args (if any):\n', (input) => {
+    rl.question('Enter command type ([n]ewWindow, run[C]ommand, [s]witchToWindow, [w]hichWindowActive, look[A]tActiveWindow, [l]istWindows), e[x]it, and args (if any):\n', (input) => {
         try {
             if (input === '') {
                 askQuestion();
@@ -36,6 +36,8 @@ function askQuestion() {
                 msg = {type: 'switchToWindow', payload: {id: args}};
             } else if (commandType === 'whichWindowActive' || commandType.toLowerCase() === 'w') {
                 msg = {type: 'whichWindowActive', payload: {}};
+            } else if (commandType === 'lookAtActiveWindow' || commandType.toLowerCase() === 'a') {
+                msg = {type: 'lookAtActiveWindow', payload: {}};
             } else if (commandType === 'listWindows' || commandType.toLowerCase() === 'l') {
                 msg = {type: 'listWindows', payload: {}};
             } else if (commandType === 'exit' || commandType.toLowerCase() === 'x') {

@@ -304,6 +304,27 @@ const tools = {
       },
     },
   },
+  lookAtActiveWindow: {
+    execute: async (args: object, addThought: (thought: string) => void) => {
+      bashServerClient.write(
+        JSON.stringify({
+          type: "lookAtActiveWindow",
+          payload: {}
+        })
+      );
+    },
+    schema: {
+      type: "function" as "function",
+      function: {
+        name: "lookAtActiveWindow",
+        description: "look at the currently active window",
+        parameters: {
+          type: "object",
+          properties: {},
+        },
+      },
+    },
+  },
   sendText: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       if (args["to"] !== "+15103567082") {
