@@ -124,6 +124,19 @@ function listWindows() {
   }
 }
 
+function lookAtActiveWindow() {
+  const windowIDs = Object.keys(env.windows);
+  if (windowIDs.length === 0) {
+    console.log('observation: there are no windows open.');
+  } else if (env.activeWindowID === null || env.activeWindowID === undefined) {
+    console.log('observation: there is no active window.');
+  } else {
+    // Send the history of the active window to the socket.
+    const activeWindow = env.windows[env.activeWindowID];
+    writeToSockets(`observation: window ${env.activeWindowID}:\n${activeWindow.history.join('')}`);
+  }
+}
+
 server.on('connection', (socket) => {
   console.log('bashServer: client connected');
   sockets.push(socket);
@@ -144,6 +157,9 @@ server.on('connection', (socket) => {
         break;
       case 'whichWindowActive':
         whichWindowActive();
+        break;
+      case 'lookAtActiveWindow':
+        lookAtActiveWindow();
         break;
       case 'listWindows':
         listWindows();
