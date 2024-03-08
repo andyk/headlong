@@ -20,7 +20,11 @@ npm run env  # An env that subscribes to a JSOS Variable and calls functions in 
 
 # Install & Run in Ubuntu
 ```
-# Make sure new enough node installed - use v21 (20 fails make install on ubuntu 22)
+# For Ubuntu 22.04 on EC2, make doesn't come pre-installed
+sudo apt update
+sudo apt install build-essential
+
+# Make sure new enough node installed - use v21
 curl -fsSL https://deb.nodesource.com/setup_21.x | sudo -E bash - &&\
 sudo apt-get install -y nodejs
 
