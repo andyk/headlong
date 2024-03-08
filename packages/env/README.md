@@ -3,8 +3,8 @@ Headlong Env is a daemon that provides actuation and sensory input for a [Headlo
 
 # Install & Run Locally via Docker
 ```
-# git clone headlong-env
-cd headlong-env
+# git clone headlong
+cd headlong/packages/env
 npm install
 
 # make sure docker is running
@@ -20,12 +20,12 @@ npm run env  # An env that subscribes to a JSOS Variable and calls functions in 
 
 # Install & Run in Ubuntu
 ```
-# Make sure new enough node installed
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - &&\
+# Make sure new enough node installed - use v21 (20 fails make install on ubuntu 22)
+curl -fsSL https://deb.nodesource.com/setup_21.x | sudo -E bash - &&\
 sudo apt-get install -y nodejs
 
-# git clone headlong-env
-cd headlong-env
+# git clone headlong
+cd headlong/packages/env
 npm install
 
 # Inside the container, run the bash server
