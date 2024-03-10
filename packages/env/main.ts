@@ -337,7 +337,10 @@ const tools = {
           from: twilioPhoneNumber,
           to: args["to"],
         })
-        .then((message) => console.log(message.sid));
+        .then((message) => {
+          console.log(message.sid);
+          addThought("observation: sent text message to " + args["to"] + " with body:\n" + args["body"]);
+        });
     },
     schema: {
       type: "function" as "function",
