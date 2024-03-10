@@ -168,13 +168,13 @@ const tools = {
       },
     },
   },
-  newShell: {
+  newWindow: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       bashServerClient.write(
         JSON.stringify({
-          type: "newShell",
+          type: "newWindow",
           payload: {
-            shellID: args["shellID"],
+            windowID: args["windowID"],
             shellPath: args["shellPath"],
             shellArgs: args["shellArgs"],
           },
@@ -184,37 +184,37 @@ const tools = {
     schema: {
       type: "function" as "function",
       function: {
-        name: "newShell",
-        description: "create a new shell",
+        name: "newWindow",
+        description: "create a new window in the terminal.",
         parameters: {
           type: "object",
           properties: {
-            shellBinary: {
+            shellPath: {
               type: "string",
               default: "/bin/bash",
-              description: "path of shell binary, e.g. /bin/bash",
+              description: "path of shell binary to open in the new terminal shell, e.g. /bin/bash",
             },
             shellArgs: {
               type: "array",
               items: {
                 type: "string",
               },
-              description: "arguments to pass to the shell binary",
+              description: "arguments to pass to the shell binary that will be opened in the new shell",
             },
-            shellID: {
+            windowID: {
               type: "string",
-              description: "unique ID for the new shell",
+              description: "unique ID for the new window",
             },
           },
         },
       },
     },
   },
-  switchToShell: {
+  switchToWindow: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       bashServerClient.write(
         JSON.stringify({
-          type: "switchToShell",
+          type: "switchToWindow",
           payload: { id: args["id"] },
         })
       );
@@ -222,21 +222,21 @@ const tools = {
     schema: {
       type: "function" as "function",
       function: {
-        name: "switchToShell",
-        description: "switch to the specified shell, i.e. 'bring it to the front'",
+        name: "switchToWindow",
+        description: "switch to the specified window, i.e. 'bring it to the front'",
         parameters: {
           type: "object",
           properties: {
             id: {
               type: "string",
-              description: "the ID of the shell to switch to",
+              description: "the ID of the window to switch to",
             },
           },
         },
       },
     },
   },
-  executeShellCommand: {
+  executeWindowCommand: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       bashServerClient.write(
         JSON.stringify({
@@ -248,16 +248,79 @@ const tools = {
     schema: {
       type: "function" as "function",
       function: {
-        name: "executeShellCommand",
-        description: "run a command in the currently active shell",
+        name: "executeWindowCommand",
+        description: "run a command in the currently active window",
         parameters: {
           type: "object",
           properties: {
             command: {
               type: "string",
-              description: "the shell command to execute in the active shell",
+              description: "the window command to execute in the active window",
             },
           },
+        },
+      },
+    },
+  },
+  listWindows: {
+    execute: async (args: object, addThought: (thought: string) => void) => {
+      bashServerClient.write(
+        JSON.stringify({
+          type: "listWindows",
+          payload: {},
+        })
+      );
+    },
+    schema: {
+      type: "function" as "function",
+      function: {
+        name: "listWindows",
+        description: "list the ids of all currently open windows",
+        parameters: {
+          type: "object",
+          properties: {},
+        },
+      },
+    },
+  },
+  whichWindowActive: {
+    execute: async (args: object, addThought: (thought: string) => void) => {
+      bashServerClient.write(
+        JSON.stringify({
+          type: "whichWindowActive",
+          payload: {},
+        })
+      );
+    },
+    schema: {
+      type: "function" as "function",
+      function: {
+        name: "whichWindowActive",
+        description: "get the id of the currently active window",
+        parameters: {
+          type: "object",
+          properties: {},
+        },
+      },
+    },
+  },
+  lookAtActiveWindow: {
+    execute: async (args: object, addThought: (thought: string) => void) => {
+      bashServerClient.write(
+        JSON.stringify({
+          type: "lookAtActiveWindow",
+          payload: {}
+        })
+      );
+    },
+    schema: {
+      type: "function" as "function",
+      function: {
+        name: "lookAtActiveWindow",
+        description: "look at the currently active window",
+        parameters: {
+          type: "object",
+          properties: {},
         },
       },
     },
@@ -274,7 +337,10 @@ const tools = {
           from: twilioPhoneNumber,
           to: args["to"],
         })
-        .then((message) => console.log(message.sid));
+        .then((message) => {
+          console.log(message.sid);
+          addThought("observation: sent text message to " + args["to"] + " with body:\n" + args["body"]);
+        });
     },
     schema: {
       type: "function" as "function",
@@ -357,7 +423,7 @@ async function computeInsertIndex(insertAfterIndex: number) {
 async function addNewThought(agentName: string, body: string, addAfterIndex?: number) {
   console.log("adding thought: ", body, " after index: ", addAfterIndex);
   if (addAfterIndex === undefined) {
-    // get max index from thoughts table
+    // get max index from thoughts windowle
     const { data: row, error } = await supabase
       .from("thoughts")
       .select("index")
@@ -410,7 +476,7 @@ const handleThought = async (thought: Thought) => {
       .eq("id", thought.id)
       .eq("agent_name", agentName);
   } else {
-    console.log("exiting handleThought since this isn't an ACTION or it doesn't *needs_handling*: ", thought);
+    console.log("exiting handleThought since this isn't an ACTION or it doesn't *needs_handling*\n--");
     return;
   }
   console.log("handling an ACTION that *needs_handling*: ", thought.body);
@@ -454,7 +520,7 @@ const handleThought = async (thought: Thought) => {
   }
 };
 
-// use supabase client `supabase` to subscribe to the thoughts table
+// use supabase client `supabase` to subscribe to the thoughts windowle
 supabase
   .channel("any")
   .on<Thought>(
@@ -485,7 +551,6 @@ const envPresenceRoom = supabase.channel("env_presence_room", {
 envPresenceRoom
   .on("presence", { event: "sync" }, () => {
     const newState = envPresenceRoom.presenceState();
-    console.log('env_presence_room got a "sync" update: ', newState);
   })
   .on("presence", { event: "join" }, ({ key, newPresences }) => {
     console.log("env_presence_room had a join", key, newPresences);

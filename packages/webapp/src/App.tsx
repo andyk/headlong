@@ -19,6 +19,8 @@ import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
+const INTER_THOUGHT_WAIT_TIME = 5000;
+const POST_ACTION_WAIT_TIME = 10000;
 
 type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
 
@@ -26,12 +28,10 @@ const removeHighlightOnInputPlugin = new Plugin({
   appendTransaction(transactions, oldState, newState) {
     let newTransaction: Transaction | null = null;
     let markAdded = false;
-    let consoleMsg = "";
     transactions.forEach((tr) => {
       if (tr.docChanged) {
         // Loop through each step in the transaction
         tr.steps.forEach((step) => {
-          // console.log("step.toJSON().stepType: ", step.toJSON().stepType);
           if (step.toJSON().stepType === "addMark") {
             markAdded = true;
           }
@@ -52,7 +52,6 @@ const removeHighlightOnInputPlugin = new Plugin({
             if (removeHighlight) {
               // If text was added in a highlight, create a transaction to remove the highlight mark
               const { from, to } = tr.selection;
-              consoleMsg = `Removing highlight from ${from} ${to}`
               const mark = newState.schema.marks.highlight;
               if (newTransaction === null) {
                 newTransaction = newState.tr.removeMark(from - 1, to, mark);
@@ -67,7 +66,6 @@ const removeHighlightOnInputPlugin = new Plugin({
 
     // Only append transactions if we've actually created any
     if (newTransaction !== null && !markAdded) {
-      console.log(consoleMsg);
       return newTransaction;
     }
     return null;
@@ -86,6 +84,9 @@ function App() {
   const [modelTemperature, setModelTemperature] = useState(0.5);
   const [envStatus, setEnvStatus] = useState("detached");
   const [thoughtIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
+  const [generatingLoopOn, setGeneratingLoopOn] = useState(false); // Use this to control the generation loop
+  const [generationTrigger, setGenerationTrigger] = useState<number | null>(null);
+  const [msTillNextThought, setMsTillNextThought] = useState<number | null>(null);
 
   // Put userMessage before/after each assistantMessage and append sysMessage (if given) to the beginning
   // [assist0, assist1, assist2] -> [sys, user, assist0, user, assist1, user]
@@ -133,30 +134,30 @@ function App() {
     assistantMessages: string[];
     max_tokens?: number;
     temperature?: number;
-    stream?: boolean; // Add stream option
-    onDelta: (delta: any) => void; // Callback to handle incoming data
-  }) {  
-    // Assuming the OpenAI SDK has an event emitter or callback mechanism for streaming
-    const allMessageParams = promptedThoughtStream(options.sysMessage, options.userMessage, options.assistantMessages);
-    // Old version
-    // const allMessageParams  =
-    //   [{role: 'system', content: options.sysMessage}]
-    //   + options.assistantMessages.map(message  => ({ role: 'assistant' , content: message }));
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4-1106-preview",
-      messages: allMessageParams as ChatCompletionMessageParam[],
-      max_tokens: options.max_tokens ?? 100,
-      temperature: options.temperature ?? 0.5,
-      stream: options.stream ?? true,
+    stream?: boolean;
+    onDelta: (delta: any) => void;
+  }): Promise<any> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const allMessageParams = promptedThoughtStream(options.sysMessage, options.userMessage, options.assistantMessages);
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4-turbo-preview",
+          messages: allMessageParams as ChatCompletionMessageParam[],
+          max_tokens: options.max_tokens ?? 100,
+          temperature: options.temperature ?? 0.5,
+          stream: options.stream ?? true,
+        });
+        const stream = completion as AsyncIterable<any>;
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content || "";
+          options.onDelta(delta); // Invoke the callback with the incoming delta
+        }
+
+        resolve(completion); // Resolve the promise after the stream is fully processed
+      } catch (error) {
+        reject(error); // Reject the promise if there's an error
+      }
     });
-
-    const stream = completion as AsyncIterable<any>;
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content || "";
-      options.onDelta(delta); // Invoke the callback with the incoming delta
-    }
-
-    return completion;
   }
 
   async function huggingFaceChat(options: {
@@ -211,9 +212,25 @@ function App() {
     return completion;
   }
 
-  function computeNewThoughtIndex(state: EditorState) {
-    // get the current thought id
-    const currentThoughtIndex: number = state.selection.$head.parent.attrs.index;
+  function computeNewThoughtIndex(state: EditorState, appendToEnd?: boolean) {
+    let newThought = null;
+
+    state.doc.descendants((node, pos) => {
+      // Iterate through the document to find the last 'thought' node with
+      // id newThoughtId, and store its position and node object
+      if (node.type.name === "thought") {
+        newThought = node;
+      }
+    });
+    const currentThoughtIndex: number = appendToEnd ? (
+      // get the last thought id
+      newThought.attrs.index
+    ) : (
+      // get the current thought id
+      state.selection.$head.parent.attrs.index
+    );
+    console.error("appendToEnd:", appendToEnd, "currentThoughtIndex: ", currentThoughtIndex);
+    console.error("state.selection", state.selection);
     let nextThoughtIndex: number | null = null;
 
     state.doc.descendants((node, pos) => {
@@ -232,9 +249,8 @@ function App() {
   const enterKeyPlugin = keymap({
     Enter: (state, dispatch) => {
       if (dispatch && state.selection.empty) {
-        let { tr } = state;
-
         const newThoughtIndex = computeNewThoughtIndex(state);
+        let { tr } = state;
         const thoughtNode = state.schema.nodes.thought.create({
           id: uuidv4(),
           index: newThoughtIndex,
@@ -303,7 +319,6 @@ function App() {
 
   const ctrlEnterKeyPlugin = keymap({
     "Ctrl-Enter": (state, dispatch) => {
-      console.log("ctrl-enter, dispatch is ", dispatch);
       if (dispatch) {
         // Assuming you have a way to identify the current thought node
         // This is a simplistic approach, adjust according to your actual node structure and IDs
@@ -312,11 +327,7 @@ function App() {
         const currentThoughtPos = state.selection.$head.before();
         const node = state.doc.nodeAt(currentThoughtPos);
 
-        console.log("currentThoughtIndex: ", currentThoughtIndex);
-        console.log("node: ", node);
-        console.log("nodeType: ", node?.type.name);
         if (node && node.type.name === "thought") {
-          console.log("handling thought");
           const metadataAttr = { ...node.attrs.metadata, needs_handling: true };
           const transaction = state.tr.setNodeAttribute(currentThoughtPos, "metadata", metadataAttr);
           dispatch(transaction);
@@ -330,8 +341,8 @@ function App() {
 
   const backspaceKeyPlugin = keymap({
     Backspace: (state, dispatch) => {
+      let retVal = false;
       const { from, to } = state.selection;
-      console.log("backspacing from: ", from, " to: ", to);
 
       // Collect all unique thought IDs within the selection range.
       const thoughtIdsInSelection = new Set();
@@ -349,17 +360,12 @@ function App() {
         // Use joinTextblockBackward to try and merge this block with the previous block if applicable.
         const result = joinTextblockBackward(state, dispatch);
         if (result) {
-          return true;
+          retVal = true;
         }
       } else {
-        console.log("Deleting a slice from within thoughts w/ IDs: ", Array.from(thoughtIdsInSelection));
         // Here you can handle the deletion of thoughts by their IDs.
         // For example, mark them for deletion in the database, update state, etc.
-        setThoughtIdsToUpdate((prev) => {
-          thoughtIdsInSelection.forEach(id => prev.add(id));
-          return new Set(prev);
-        });
-  
+ 
         if (dispatch) {
           // Create and dispatch a transaction that deletes the selected range.
           const deleteTransaction = state.tr.delete(from, to);
@@ -368,8 +374,16 @@ function App() {
         
         // Return true to indicate that the backspace handler has done something,
         // preventing the default backspace behavior.
-        return true;
+        retVal = true;
       }
+      if (thoughtIdsInSelection.size === 0 || retVal === false) {
+        return false;
+      }
+      setThoughtIdsToUpdate((prev) => {
+        thoughtIdsInSelection.forEach(id => prev.add(id));
+        return new Set(prev);
+      });
+      return true;
     },
   });
   
@@ -424,19 +438,8 @@ function App() {
     },
   });
 
-  async function addNewThoughtToDatabase(id: string, body: string, agentName: string, index: number) {
-    const { data, error } = await supabase
-      .from(THOUGHTS_TABLE_NAME)
-      .insert([{ id: id, index: index, body: body, agent_name: agentName }]);
-    if (error) {
-      console.error("Error adding new thought to database", error);
-    } else {
-      console.log("Added new thought to database ", id);
-    }
-  }
-
   function pushToDB(idsToUpdate: Set<string>) {
-    console.log("pushToDB called with isToUpdate: ", idsToUpdate);
+    console.log("pushToDB called with idsToUpdate: ", idsToUpdate);
 
     if (!editorViewRef.current) {
       console.error("Editor view is not available.");
@@ -481,7 +484,7 @@ function App() {
           return acc;
         }, []);
 
-        console.log("marks: ", marks);
+        console.debug(`Attempting to update thought ${id} in database.`);
         const { data: newThoughtRow, error } = await supabase
           .from(THOUGHTS_TABLE_NAME)
           .update({
@@ -502,23 +505,27 @@ function App() {
           console.error("Error updating thought:", error);
         } else if (newThoughtRow === null) {
           // This is a new thought so update failed and we need to insert it
-          console.log(`Inserting new thought ${id} into database.`);
+          console.debug(`Inserting new thought ${id} into database.`);
           const { data, error } = await supabase.from(THOUGHTS_TABLE_NAME).insert([
             {
               id: id,
               index: foundNode.attrs.index,
               body: thoughtText,
               agent_name: selectedAgentName,
-              metadata: { last_updated_by: APP_INSTANCE_ID, marks },
+              metadata: {
+                ...foundNode.attrs.metadata,
+                last_updated_by: APP_INSTANCE_ID,
+                marks,
+              },
             },
           ]);
           if (error) {
             console.error("Error inserting new thought into database", error);
           } else {
-            console.log(`Thought ${id} inserted successfully.`);
+            console.debug(`Thought ${id} inserted successfully.`);
           }
         } else {
-          console.log(`Thought ${id} updated successfully.`);
+          console.debug(`Thought ${id} updated successfully.`);
         }
       }
     });
@@ -540,7 +547,6 @@ function App() {
     envPresenceRoom
       .on("presence", { event: "sync" }, () => {
         const newState = envPresenceRoom.presenceState();
-        console.log("sync", newState);
       })
       .on("presence", { event: "join" }, ({ key, newPresences }) => {
         console.log("join", key, newPresences);
@@ -620,9 +626,10 @@ function App() {
         }
       } else if (eventType === "UPDATE") {
         // Update the thought in the editor by replacing the node with updated content
+        let cursor = 0; // A cursor to track our position as we apply marks
         state.doc.descendants((node, pos) => {
           if (node.type.name === "thought" && node.attrs.id === oldThought.id) {
-            console.log("updating thought in editor with metadata: ", newThought.metadata);
+            console.debug("updating thought in editor with metadata: ", newThought.metadata);
             const updatedThoughtNode = state.schema.nodes.thought.createAndFill(
               {
                 id: newThought.id,
@@ -654,7 +661,7 @@ function App() {
                     cursor += length; // Move the cursor forward
                     return acc;
                   }, [])
-                : state.schema.text(newThought.body),
+                : state.schema.text(newThought.body)
             );
 
             if (updatedThoughtNode) {
@@ -681,7 +688,7 @@ function App() {
     const subscription = supabase
       .channel("thought_table_updates")
       .on<Thought>("postgres_changes", { event: "*", schema: "public", table: THOUGHTS_TABLE_NAME }, (payload) => {
-        console.log("Change received!", payload);
+        console.debug("Change received!", payload);
         // call updateEditorFromSupabase with the payload if payload.new.agent_name === selectedAgentName
         if ("agent_name" in payload.new && payload.new.agent_name === selectedAgentName) {
           if (payload.new.metadata?.last_updated_by !== APP_INSTANCE_ID) {
@@ -690,11 +697,11 @@ function App() {
         }
       })
       .subscribe();
-    console.log("subscribed to thought updates for agent: ", selectedAgentName);
+    console.debug("subscribed to thought updates for agent: ", selectedAgentName);
 
     // Cleanup subscription on component unmount
     return () => {
-      console.log(`selectedAgentName changed: unsubscribing from updates about agent ${selectedAgentName}`);
+      console.debug(`selectedAgentName changed: unsubscribing from updates about agent ${selectedAgentName}`);
       supabase.removeChannel(subscription);
     };
   }, [selectedAgentName]); // Empty dependency array ensures this effect runs only once on mount
@@ -822,7 +829,7 @@ function App() {
         backspaceKeyPlugin,
         modAKeyplugin,
         history(),
-        keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo}),
+        keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }),
       ],
     });
 
@@ -849,15 +856,12 @@ function App() {
               return new Set(prev).add(currentThoughtId);
             });
           }
-        } else {
-          console.log("doc didn't change");
-        }
+        } 
         editorViewRef.current.updateState(newState);
       },
     });
 
     const selection = ProsemirrorSelection.atEnd(view.state.doc);
-    console.log("selection: ", selection);
     const tr = view.state.tr.setSelection(selection).scrollIntoView();
     const updatedState = view.state.apply(tr);
     view.updateState(updatedState);
@@ -891,17 +895,41 @@ function App() {
     return texts;
   }
 
-  const insertTextAtCursor = (text: string) => {
-  };
+  useEffect(() => {
+    let interval: NodeJS.Timeout | undefined = undefined;
 
-  const generateThought = async () => {
+    if (generatingLoopOn !== null && generationTrigger != null) {
+      interval = setInterval(() => {
+        const newTimeLeft = (INTER_THOUGHT_WAIT_TIME - (Date.now() - generationTrigger)) / 1000;
+
+        if (newTimeLeft <= 0) {
+          setMsTillNextThought(0);
+        } else {
+          setMsTillNextThought(newTimeLeft);
+        }
+      }, 500);
+    } else if (interval !== undefined) {
+      clearInterval(interval);
+    }
+
+    return () => clearInterval(interval); // Cleanup interval on component unmount
+  }, [generatingLoopOn, generationTrigger]);
+
+  useEffect(() => {
+    if (generatingLoopOn) {
+      generateThought(true);
+    }
+  }, [generatingLoopOn, generationTrigger]); // This effect depends on generatingOn, re-run when it changes
+
+  const generateThought = async (appendToEnd?: boolean) => {
     if (!editorViewRef.current) {
       return;
     }
+    let usePostActionWaitTime = false;
 
     // Generate a new thought ID and index
     const newThoughtId = uuidv4(); // Assuming uuidv4() is available for generating unique IDs
-    const newThoughtIndex = computeNewThoughtIndex(editorViewRef.current.state);
+    const newThoughtIndex = computeNewThoughtIndex(editorViewRef.current.state, appendToEnd);
 
     const schema = editorViewRef.current.state.schema;
     // Create a new thought without setting needs_handling yet
@@ -913,76 +941,149 @@ function App() {
 
     // Add the new thought to the editor state
     let tr = editorViewRef.current.state.tr;
-    if (!tr.selection.empty) tr.deleteSelection();
-    const position = tr.selection.from; // Insert position
-
     // Adjust the insertion position to after the current node
-    const insertPos = tr.doc.resolve(position).after(1);
-
-    // Insert the new thought node and move the selection
+    const insertPos = appendToEnd ? (
+      tr.doc.content.size
+    ) : (
+      tr.doc.resolve(tr.selection.from).after(1)
+    );
+    console.log("in generateThought, appendToEnd: ", appendToEnd, " insertPos: ", insertPos);
+    // Insert the new thought node
     tr = tr.insert(insertPos, newThoughtNode);
+    // reset the cursor to the end of the document
+    tr = tr.setSelection(TextSelection.create(tr.doc, insertPos)).scrollIntoView();
 
-    // Calculate the position for the new selection
-    // It should be within the newly inserted thought node, accounting for its start position
-    const newPos = insertPos + 1; // Position inside the new thought node
-
-    // Update the transaction with the new selection
-    tr.setSelection(TextSelection.create(tr.doc, newPos)).scrollIntoView();
     editorViewRef.current.dispatch(tr);
 
     // Prepare for LLM text generation
     const thoughts = extractThoughtTexts(editorViewRef.current.state.doc);
-    console.log("thoughts: ", thoughts);
     // use editorView to get the thought id of the current selection
     const currThoughtId = newThoughtId; // Use the newly created thought ID
     // create a new list from `thoughts` that only has thoughts up to and including
     // the thought with currThoughtId
-    const thoughtsAfterCurr = thoughts.slice(0, thoughts.findIndex(([id, _]) => id === currThoughtId) + 1);
-    const sysMessage = "You are going to do some thinking on your own. Try to be conscious of your own thoughts so you can tell them to me one by one.";
+    const thoughtsBeforeCurr = thoughts.slice(
+      0,
+      thoughts.findIndex(([id, _]) => id === currThoughtId)
+    );
+    const sysMessage = "You are going to do some thinking on your own. Try to be conscious of your own thoughts so you can tell them to me one by one. Observations are injected into your stream of thoughts fromthe outside world so you should never come up with a thought that starts with 'observation:'";
     const userMessage = "What is your next thought?";
-    const assistantMessages: string[] = thoughtsAfterCurr.map(([_, body]) => {return body;});
+    const assistantMessages: string[] = thoughtsBeforeCurr.map(([_, body]) => {return body;});
     console.log("Assistant Messages: ", assistantMessages);
+
+    async function appendToGeneratedThought(delta: string) {
+      if (delta && editorViewRef.current) {
+        const tr = editorViewRef.current.state.tr;
+  
+        let newThoughtPos = null;
+        let newThought = null;
+
+        tr.doc.descendants((node, pos) => {
+          // Iterate through the document to find the last 'thought' node with
+          // id newThoughtId, and store its position and node object
+          if (node.type.name === "thought" && node.attrs.id === newThoughtId) {
+            newThoughtPos = pos;
+            newThought = node;
+          }
+        });
+  
+        if (newThoughtPos === null) {
+          console.log("No 'thought' node found in the document.");
+          return;
+        }
+
+        // Create a text node with the delta content
+        const textNode = editorViewRef.current.state.schema.text(delta);
+        let insertPos = newThoughtPos as number + newThought.nodeSize - 1;
+  
+        // Insert the delta text at the end of the last thought
+        tr.insert(insertPos, textNode).scrollIntoView();
+  
+        // Apply highlight mark if needed
+        const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
+        tr.addMark(insertPos, insertPos + delta.length, highlightMark);
+  
+        editorViewRef.current.dispatch(tr);
+      }
+    }
+
     const chatArgs = {
       sysMessage: sysMessage,
       userMessage: userMessage,
       assistantMessages: assistantMessages,
       temperature: modelTemperature,
       stream: true,
-      onDelta: async (delta) => {
-        if (delta) {
-          if (editorViewRef.current) {
-            const { tr } = editorViewRef.current.state;
-            const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
-            if (!tr.selection.empty) tr.deleteSelection();
-            const position = tr.selection.from; // Insert position
-            const textNode = editorViewRef.current.state.schema.text(delta);
-            tr.insert(position, textNode);
-            const endPosition = position + delta.length;
-            tr.addMark(position, endPosition, highlightMark);
-            let pos = null;
-            tr.doc.descendants((node, position) => {
-              if (node.attrs.id === newThoughtId) {
-                pos = position;
-                return false; // Stop searching
-              }
-            });
-            if (pos !== null) {
-              const node = tr.doc.nodeAt(pos);
-              console.log("found node at position: ", position, node);
-              const metadata = node.attrs.metadata;
-              const newMetadata = { ...metadata, needs_handling: true };
-              tr.setNodeMarkup(pos, null, { ...node.attrs, metadata: newMetadata });
-            }
-            editorViewRef.current.dispatch(tr);
-          }
-        }
-      },
+      onDelta: appendToGeneratedThought
     };
-    modelSelection === "GPT4" ? gpt4TurboChat(chatArgs) : huggingFaceChat(chatArgs);
-    // After the LLM finishes generating the thought, mark it as needs handling
+    modelSelection === "GPT4" ? await gpt4TurboChat(chatArgs) : await huggingFaceChat(chatArgs);
+    // After the new text is fully generated by the LLM
+    const obsRewriteTr = editorViewRef.current.state.tr;
+    let newThoughtPos: null | number = null;
+    let newThought: null | ProseMirrorNode = null;
+
+    obsRewriteTr.doc.descendants((node, pos) => {
+      // Iterate through the document to find the last 'thought' node with
+      // id newThoughtId, and store its position and node object
+      if (node.type.name === "thought" && node.attrs.id === newThoughtId) {
+        newThoughtPos = pos;
+        newThought = node;
+      }
+    });
+
+    // first see if the new thought starts with "observation: "
+    console.log("testing to see if the thought just added was an observation: ", newThought.textContent.toLowerCase());
+    if (newThought && newThought.textContent.toLowerCase().startsWith("observation:")) {
+      console.log("it was an observation, so rewrite it")
+      // if it does, then ask the LLM to rewrite the observation into a reflection on what it expects to observe next
+      const observation = newThought.textContent.substring(12);
+      console.log("observation to rewrite: ", observation);
+      const rewriteObsSysMessage = "Your job is to look at the series of thoughts, and then you will be shown a hypothetical observation with the format of 'observation: ...' which represents what you expect to observe next, and then reformat that observation into a more naturally worded reflection about your expect of what will come next.";
+      const rewriteObsUserMessage = "please rewrite the following so that it does not start with 'observation: ' and intead is a more naturally worded inner thought about your prediction of what you think will happen next...\n" + observation;
+      const rewriteObsChatArgs = {
+        sysMessage: rewriteObsSysMessage,
+        userMessage: rewriteObsUserMessage,
+        assistantMessages: assistantMessages,
+        temperature: modelTemperature,
+        stream: true,
+        onDelta: appendToGeneratedThought
+      };
+      // clear the text of the last thought and then rewrite it
+      obsRewriteTr.delete(newThoughtPos, newThoughtPos + newThought.nodeSize);
+      //apply obsRewriteTr to the editorView
+      editorViewRef.current.dispatch(obsRewriteTr);
+      modelSelection === "GPT4" ? await gpt4TurboChat(rewriteObsChatArgs) : await huggingFaceChat(rewriteObsChatArgs);
+    }
+    // then mark the new thought as needs_handling = true
+    let pos = null;
+
+    const markupTr = editorViewRef.current.state.tr;
+    markupTr.doc.descendants((node, position) => {
+      if (node.attrs.id === newThoughtId) {
+        pos = position;
+        return false; // Stop searching
+      }
+    });
+    if (pos !== null) {
+      // if node's text contents.toLower starts with "action:"
+      // then set metadata.needs_handling to true
+      const node = markupTr.doc.nodeAt(pos);
+      if (node?.textContent.toLowerCase().startsWith("action:")) {
+        console.log(`new thought ${node} is an action, setting needs_handling to true`)
+        const metadata = node.attrs.metadata;
+        const newMetadata = { ...metadata, needs_handling: true };
+        markupTr.setNodeMarkup(pos, null, { ...node.attrs, metadata: newMetadata });
+        editorViewRef.current.dispatch(markupTr);
+        usePostActionWaitTime = true;
+      }
+    }
     setThoughtIdsToUpdate((prev) => {
       return new Set(prev).add(newThoughtId);
     });
+
+    const waitTime = usePostActionWaitTime ? POST_ACTION_WAIT_TIME : INTER_THOUGHT_WAIT_TIME
+    setTimeout(
+      () => { setGenerationTrigger((new Date()).getTime() + waitTime) },
+      usePostActionWaitTime ? POST_ACTION_WAIT_TIME : INTER_THOUGHT_WAIT_TIME
+    );
   };
 
   return (
@@ -1047,11 +1148,71 @@ function App() {
         <div ref={editorRef} className="w-full h-full p-1"></div> {/* Ensure the ref div fills its parent */}
       </div>
       <div className="flex justify-between items-center p-2 border-t border-slate-200">
-        {" "}
-        {/* Use p-2 for padding and bg-gray-100 for a light background */}
-        <button className="bg-blue-500 text-white py-1 px-2 rounded-md" onClick={generateThought}>
-          Generate
-        </button>
+        <div className="flex items-center space-x-2">
+          {/* Use p-2 for padding and bg-gray-100 for a light background */}
+          <button className="bg-blue-500 text-white py-2 px-4 rounded-md" onClick={() => generateThought()}>
+            Generate Thought
+          </button>
+          <button
+            className={generatingLoopOn ? (
+              "bg-red-500 text-white py-2 px-4 rounded mx-2"
+            ) : (
+              "bg-blue-500 text-white py-2 px-4 rounded mx-2"
+            )}
+          onClick={ () => {
+            setGeneratingLoopOn(currVal => {
+              return !currVal;
+            });
+          }}>
+            {generatingLoopOn ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path fill="#FFFFFF" d="M6 4h4v16H6z" />
+                <path fill="#FFFFFF" d="M14 4h4v16h-4z" />
+              </svg> // Pause icon
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-6 w-6" 
+                fill="currentColor"
+                viewBox="2 5 20 14" 
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8 5v14l11-7z"
+                />
+              </svg>
+            )}
+          </button>
+          {generatingLoopOn && generationTrigger !== null ? (
+            <span className="text-xs">{
+              // round to 0 decimal places
+              msTillNextThought?.toFixed(0) || ""
+            }</span>
+          ) : null }
+          {/* 
+          <label htmlFor="lockScrollToBottom" className="flex items-center space-x-1">
+            <input
+              type="checkbox"
+              id="lockScrollToBottom"
+              checked={lockScrollToBottom}
+              onChange={(e) => {
+                console.log("setting lockScrollToBottom to ", e.target.checked)
+                return setLockScrollToBottom(e.target.checked)
+              }}
+            />
+            <span>Lock to bottom</span>
+          </label>
+          */}
+        </div>
         <div className="flex items-center">
           {import.meta.env.VITE_HF_API_KEY && import.meta.env.VITE_HF_LLAMA_ENDPOINT && (
             <>

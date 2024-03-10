@@ -1,21 +1,25 @@
 import { createServer, Socket } from 'net';
 import { IPty, spawn } from 'node-pty'; // Import spawn from node-pty
+import { throttle } from 'lodash';
+
+const REFRESH_RATE = 2000; // in milliseconds
 
 const bashServerPort = Number(process.env.BASH_SERVER_PORT) || 3031;
 
-interface Shell {
+interface Window {
   proc: IPty;
-  history: string;
+  history: string[];  // history of window that has already been sent.
+  outputBuffer: string[];  // buffered output yet to be sent.
 }
 
 interface Env {
-  shells: { [id: string]: Shell };
-  activeShellID: string | null;
+  windows: { [id: string]: Window };
+  activeWindowID: string | null;
 }
 
 const env: Env = {
-  shells: {},
-  activeShellID: null,
+  windows: {},
+  activeWindowID: null,
 };
 
 const server = createServer();
@@ -28,62 +32,108 @@ function writeToSockets(msg: string) {
   });
 }
 
-function newShell(payload: any) {
-  const { shellID, shellPath = '/bin/bash', shellArgs = [] } = payload;
-  const id = shellID || `shell-${Math.random().toString(36).substring(7)}`;
+function pushNewOutputs() {
+  Object.entries(env.windows).forEach(([id, window]) => {
+    if (window.outputBuffer.length > 0) {
+      writeToSockets(`observation: window ${id}:\n${window.outputBuffer.join('')}`);
+      // apppend outputBuffer to history for this window and clear outputBUffer
+      window.history.push(...window.outputBuffer);
+      window.outputBuffer = [];
+    }
+  });
+};
 
-  // Using node-pty to spawn the shell
-  env.shells[id] = {
+// Throttle the function to send updates to sockets
+const throttledPushNewOutputs = throttle(() => {
+  pushNewOutputs();
+}, REFRESH_RATE);
+
+function addOutputToBuffer(windowID: string, data: string) {
+  if (env.windows[windowID]) {
+    env.windows[windowID].outputBuffer.push(data);
+    throttledPushNewOutputs();
+  }
+}
+
+function newWindow(payload: any) {
+  const { windowID, shellPath: shellPath = '/bin/bash', shellArgs: shellArgs = [] } = payload;
+  const id = windowID || `window-${Math.random().toString(36).substring(7)}`;
+
+  // Using node-pty to spawn the window
+  env.windows[id] = {
     proc: spawn(shellPath, shellArgs, {
       name: 'xterm-color',
       cwd: process.cwd(),
       env: process.env,
     }),
-    history: '',
+    history: [],
+    outputBuffer: [],
   };
-  env.activeShellID = id;
+  env.activeWindowID = id;
 
-  writeToSockets(`observation: created shell with ID ${id} and made it active shell.`);
+  writeToSockets(`observation: created window with ID ${id} and made it active window.`);
 
   // Relay messages from the subprocess to the socket
-  env.shells[id].proc.onData((data) => {
-    writeToSockets(`observation: shell ${id}:\n${data}`);
+  env.windows[id].proc.onData((data) => {
+    addOutputToBuffer(id, data);
   });
 
-  env.shells[id].proc.onExit(({ exitCode, signal }) => {
-    writeToSockets(`observation: shell '${id}' exited with code ${exitCode}, signal ${signal}.`);
-    // Cleanup shell from env.shells when it exits
-    delete env.shells[id];
-    if (env.activeShellID === id) {
-      env.activeShellID = null; // Reset active shell ID if the exited shell was active
+  env.windows[id].proc.onExit(({ exitCode, signal }) => {
+    writeToSockets(`observation: window '${id}' exited with code ${exitCode}, signal ${signal}.`);
+    // Cleanup window from env.windows when it exits
+    delete env.windows[id];
+    if (env.activeWindowID === id) {
+      env.activeWindowID = null; // Reset active window ID if the exited window was active
     }
   });
 }
 
 function runCommand(payload: any) {
-  if (!env.activeShellID) {
-    writeToSockets('observation: there are no shells open.');
+  if (!env.activeWindowID) {
+    writeToSockets('observation: there are no windows open.');
     return;
   }
   const { command } = payload;
-  env.shells[env.activeShellID].proc.write(`${command}\n`);
+  env.windows[env.activeWindowID].proc.write(`${command}\n`);
 }
 
-function switchToShell(payload: any) {
+function switchToWindow(payload: any) {
   const { id } = payload;
-  if (env.shells[id]) {
-    env.activeShellID = id;
-    writeToSockets(`observation: switched to shell '${id}'.`);
+  if (env.windows[id]) {
+    env.activeWindowID = id;
+    writeToSockets(`observation: switched to window '${id}'.`);
   } else {
-    writeToSockets(`observation: shell '${id}' does not exist.`);
+    writeToSockets(`observation: window '${id}' does not exist.`);
   }
 }
 
-function whichShellActive() {
-  if (!env.activeShellID) {
-    writeToSockets('observation: there are no shells open.');
+function whichWindowActive() {
+  if (!env.activeWindowID) {
+    writeToSockets('observation: there are no windows open.');
   } else {
-    writeToSockets(`observation: active shell is '${env.activeShellID}'.`);
+    writeToSockets(`observation: active window is '${env.activeWindowID}'.`);
+  }
+}
+
+function listWindows() {
+  const windowIDs = Object.keys(env.windows);
+  if (windowIDs.length === 0) {
+    writeToSockets('observation: there are no windows open.');
+  } else {
+    writeToSockets(`observation: open windows: ${windowIDs.join(', ')}`);
+  }
+}
+
+function lookAtActiveWindow() {
+  const windowIDs = Object.keys(env.windows);
+  if (windowIDs.length === 0) {
+    console.log('observation: there are no windows open.');
+  } else if (env.activeWindowID === null || env.activeWindowID === undefined) {
+    console.log('observation: there is no active window.');
+  } else {
+    // Send the history of the active window to the socket.
+    const activeWindow = env.windows[env.activeWindowID];
+    writeToSockets(`observation: window ${env.activeWindowID}:\n${activeWindow.history.join('')}`);
   }
 }
 
@@ -96,17 +146,23 @@ server.on('connection', (socket) => {
     const msg = JSON.parse(data.toString());
     const { type, payload = {} } = msg;
     switch (type) {
-      case 'newShell':
-        newShell(payload);
+      case 'newWindow':
+        newWindow(payload);
         break;
       case 'runCommand':
         runCommand(payload);
         break;
-      case 'switchToShell':
-        switchToShell(payload);
+      case 'switchToWindow':
+        switchToWindow(payload);
         break;
-      case 'whichShellActive':
-        whichShellActive();
+      case 'whichWindowActive':
+        whichWindowActive();
+        break;
+      case 'lookAtActiveWindow':
+        lookAtActiveWindow();
+        break;
+      case 'listWindows':
+        listWindows();
         break;
       default:
         console.log('received unrecognized type from client:', type);

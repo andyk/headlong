@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@types/jsdom": "^21.1.6",
+    "@types/lodash": "^4.14.202",
     "@types/uuid": "^9.0.8",
     "typescript": "^5.2.2"
   }
