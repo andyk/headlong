@@ -1197,17 +1197,7 @@ function App() {
               // round to 0 decimal places
               msTillNextThought?.toFixed(0) || ""
             }</span>
-          ) : (
-              <span>
-                generatingLoopOn: {generatingLoopOn.toString()}
-                <br/>
-                generationTrigger: {generationTrigger?.toString() || "null"}
-                <br/>
-                Date.now(): {Date.now()}
-                <br/>
-                {generationTrigger ? (generationTrigger - Date.now())/1000 : "null"}
-              </span>
-          )}
+          ) : null }
           {/* 
           <label htmlFor="lockScrollToBottom" className="flex items-center space-x-1">
             <input
