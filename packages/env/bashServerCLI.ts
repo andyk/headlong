@@ -17,7 +17,15 @@ client.on('data', (data) => {
 });
 
 function askQuestion() {
-    rl.question('Enter command type ([n]ewWindow, run[C]ommand, [s]witchToWindow, [w]hichWindowActive, look[A]tActiveWindow, [l]istWindows), e[x]it, and args (if any):\n', (input) => {
+    rl.question(`Enter command and args (if any)
+      o [n]ewWindow [windowID]
+      o run[C]ommand cmdline  # new line will be added after cmdline
+      o writeToStd[i]n cmd
+      o [s]witchToWindow
+      o [w]hichWindowActive
+      o look[A]tActiveWindow
+      o [l]istWindows
+      o e[x]it:\n`, (input) => {
         try {
             if (input === '') {
                 askQuestion();
@@ -32,7 +40,7 @@ function askQuestion() {
                     msg = {type: 'newWindow', payload: {}};
             } else if (commandType === 'runCommand' || commandType.toLowerCase() === 'c') {
                 msg = {type: 'runCommand', payload: {command: new String(args.join(' '))}};
-            } else if (commandType === 'writeToStdin' || commandType.toLowerCase() === 'c') {
+            } else if (commandType === 'writeToStdin' || commandType.toLowerCase() === 'i') {
                 msg = {type: 'writeToStdin', payload: {command: new String(args.join(' '))}};
             } else if (commandType === 'switchToWindow' || commandType.toLowerCase() === 's') {
                 msg = {type: 'switchToWindow', payload: {id: args}};
