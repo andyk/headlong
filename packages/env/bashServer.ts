@@ -88,6 +88,15 @@ function newWindow(payload: any) {
   });
 }
 
+function writeToStdin(payload: any) {
+  if (!env.activeWindowID) {
+    writeToSockets('observation: there are no windows open.');
+    return;
+  }
+  const { input } = payload;
+  env.windows[env.activeWindowID].proc.write(input);
+}
+
 function runCommand(payload: any) {
   if (!env.activeWindowID) {
     writeToSockets('observation: there are no windows open.');

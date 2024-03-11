@@ -32,6 +32,8 @@ function askQuestion() {
                     msg = {type: 'newWindow', payload: {}};
             } else if (commandType === 'runCommand' || commandType.toLowerCase() === 'c') {
                 msg = {type: 'runCommand', payload: {command: new String(args.join(' '))}};
+            } else if (commandType === 'writeToStdin' || commandType.toLowerCase() === 'c') {
+                msg = {type: 'writeToStdin', payload: {command: new String(args.join(' '))}};
             } else if (commandType === 'switchToWindow' || commandType.toLowerCase() === 's') {
                 msg = {type: 'switchToWindow', payload: {id: args}};
             } else if (commandType === 'whichWindowActive' || commandType.toLowerCase() === 'w') {
