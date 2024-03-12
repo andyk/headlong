@@ -75,6 +75,7 @@ function newWindow(payload: any) {
 
   // Relay messages from the subprocess to the socket
   env.windows[id].proc.onData((data) => {
+    console.log("hanlding onData event. data: ", data);
     addOutputToBuffer(id, data);
   });
 
@@ -94,7 +95,10 @@ function writeToStdin(payload: any) {
     return;
   }
   let { input } = payload;
-
+  if (input === undefined) {
+    console.log('input is undefined. you must provide an input argument');
+    return;
+  }
   // Dynamically convert escaped sequences to actual characters
   // This replaces instances of "\\x" with "\x" to properly interpret the escape sequence
   input = input.replace(/\\x([0-9A-Fa-f]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
