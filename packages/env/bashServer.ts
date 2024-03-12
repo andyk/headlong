@@ -162,6 +162,7 @@ server.on('connection', (socket) => {
   socket.on('data', (data) => {
     console.log('received:', data.toString());
     const msg = JSON.parse(data.toString());
+    console.log("JSON parsed msg received: ", msg)
     const { type, payload = {} } = msg;
     switch (type) {
       case 'newWindow':

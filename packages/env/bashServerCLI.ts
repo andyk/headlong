@@ -41,7 +41,7 @@ function askQuestion() {
             } else if (commandType === 'runCommand' || commandType.toLowerCase() === 'c') {
                 msg = {type: 'runCommand', payload: {command: new String(args.join(' '))}};
             } else if (commandType === 'writeToStdin' || commandType.toLowerCase() === 'i') {
-                msg = {type: 'writeToStdin', payload: {command: new String(args.join(' '))}};
+                msg = {type: 'writeToStdin', payload: {input: new String(args.join(' '))}};
             } else if (commandType === 'switchToWindow' || commandType.toLowerCase() === 's') {
                 msg = {type: 'switchToWindow', payload: {id: args}};
             } else if (commandType === 'whichWindowActive' || commandType.toLowerCase() === 'w') {
