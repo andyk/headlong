@@ -58,7 +58,6 @@ function askQuestion() {
                 return;
             }
             client.write(JSON.stringify(msg));
-            console.log("wrote to bashServer: ", JSON.stringify(msg));
         } catch(e) {
             console.log("error parsing input and sending it to bashServer: ", e);
         }

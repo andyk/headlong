@@ -102,7 +102,7 @@ function writeToStdin(payload: any) {
   // Dynamically convert escaped sequences to actual characters
   // This replaces instances of "\\x" with "\x" to properly interpret the escape sequence
   input = input.replace(/\\x([0-9A-Fa-f]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
-
+  console.log("writing input to active window: ", input);
   env.windows[env.activeWindowID].proc.write(input);
 }
 
