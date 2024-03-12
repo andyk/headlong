@@ -93,7 +93,12 @@ function writeToStdin(payload: any) {
     writeToSockets('observation: there are no windows open.');
     return;
   }
-  const { input } = payload;
+  let { input } = payload;
+
+  // Dynamically convert escaped sequences to actual characters
+  // This replaces instances of "\\x" with "\x" to properly interpret the escape sequence
+  input = input.replace(/\\x([0-9A-Fa-f]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
+
   env.windows[env.activeWindowID].proc.write(input);
 }
 
@@ -160,6 +165,9 @@ server.on('connection', (socket) => {
         break;
       case 'runCommand':
         runCommand(payload);
+        break;
+      case 'writeToStdin':
+        writeToStdin(payload);
         break;
       case 'switchToWindow':
         switchToWindow(payload);
