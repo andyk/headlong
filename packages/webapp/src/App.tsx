@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import "./App-compiled.css";
-import { Schema, Node as ProseMirrorNode } from "prosemirror-model";
+import { Schema, Mark, Node as ProseMirrorNode } from "prosemirror-model";
 import { EditorState, Transaction, Selection as ProsemirrorSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { joinTextblockBackward } from "prosemirror-commands";
@@ -71,6 +71,24 @@ const removeHighlightOnInputPlugin = new Plugin({
     return null;
   },
 });
+
+function breakTextAndPushToContent(text: string, content: ProseMirrorNode[], schema: Schema, marks?: Mark[]): ProseMirrorNode[] {
+  console.log("breakTextAndPushToContent handling text: ", text, " with marks: ", marks)
+  const brokenText = text.split("\n");
+  brokenText.forEach((line, index) => {
+    if (index > 0) {
+      content.push(schema.node("soft_break"));
+    }
+    if (line !== "") {
+      if (marks === undefined) {
+        content.push(schema.text(line));
+      } else {
+        content.push(schema.text(line, marks));
+      }
+    }
+  })
+  return content;
+}
 
 function App() {
   const editorRef = useRef<HTMLElement>();
@@ -229,8 +247,6 @@ function App() {
       // get the current thought id
       state.selection.$head.parent.attrs.index
     );
-    console.error("appendToEnd:", appendToEnd, "currentThoughtIndex: ", currentThoughtIndex);
-    console.error("state.selection", state.selection);
     let nextThoughtIndex: number | null = null;
 
     state.doc.descendants((node, pos) => {
@@ -245,6 +261,18 @@ function App() {
       : currentThoughtIndex + 1.0;
     return newThoughtIndex;
   }
+
+  function insertSoftBreak(state: EditorState, dispatch) {
+    const softBreak = state.schema.nodes.soft_break.create();
+    dispatch(state.tr.replaceSelectionWith(softBreak).scrollIntoView());
+    return true;
+  }
+
+  const shiftEnterKeyPlugin = keymap({
+    'Shift-Enter': (state, dispatch) => {
+      return insertSoftBreak(state, dispatch);
+    }
+  });
 
   const enterKeyPlugin = keymap({
     Enter: (state, dispatch) => {
@@ -470,8 +498,16 @@ function App() {
           console.log(`Deleted thought with id ${id} from database.`);
         }
       } else {
-        // Extract the text from the found node
-        const thoughtText = foundNode.textContent;
+        // join the text nodes of the thought with the soft_break nodes
+        // turning the soft_break nodes into newlines
+        const thoughtTextContent = (foundNode as ProseMirrorNode).content.content
+        const thoughtText = thoughtTextContent.reduce((acc, node) => {
+          if (node.type.name === "text") {
+            return acc + node.text;
+          } else if (node.type.name === "soft_break") {
+            return acc + "\n";
+          }
+        }, "")
 
         // Extract marks using .toJSON() on each mark
         const marks = foundNode.content.content.reduce((acc, node) => {
@@ -612,13 +648,21 @@ function App() {
         // Insert the new thought into the editor
         // Determine where to insert the new thought based on its index
         const insertPos = findInsertPosition(state.doc, newThought.index);
+        // parse the newThought.body into text nodes separated by soft_break nodes
+        // wherever there were \n characters in the body
         const thoughtNode = state.schema.nodes.thought.createAndFill(
           {
             id: newThought.id,
             index: newThought.index,
             // any other attributes
           },
-          state.schema.text(newThought.body)
+          newThought.body.split("\n").reduce((acc, text, index, array) => {
+            acc.push(state.schema.text(text));
+            if (index < array.length - 1) {
+              acc.push(state.schema.nodes.soft_break.create());
+            }
+            return acc;
+          }, [])
         );
 
         if (thoughtNode) {
@@ -629,39 +673,45 @@ function App() {
         let cursor = 0; // A cursor to track our position as we apply marks
         state.doc.descendants((node, pos) => {
           if (node.type.name === "thought" && node.attrs.id === oldThought.id) {
-            console.debug("updating thought in editor with metadata: ", newThought.metadata);
+            // marks is an array of [length, markJSON] where markJSON is the serialized mark
+            // of length length or null if there are no marks for that range.
+            // create an array of text elements, each with the appropriate marks
+            let nodes: ProseMirrorNode[] = [];
+            if (newThought.metadata?.marks) {
+              nodes = newThought.metadata.marks.reduce((acc, [length, markDefs]) => {
+                const text = newThought.body.substring(cursor, cursor + length);
+                let marks = [];
+
+                if (markDefs !== null) {
+                  markDefs.forEach((markDef) => {
+                    if (markDef.type) {
+                      const markType = state.schema.marks[markDef.type];
+                      if (markType) {
+                        marks.push(markType.create(markDef.attrs));
+                      }
+                    }
+                  });
+                  breakTextAndPushToContent(text, acc, state.schema, marks);
+                } else {
+                  breakTextAndPushToContent(text, acc, state.schema);
+                }
+                cursor += length; // Move the cursor forward
+                return acc;
+              }, [])
+              // Handle any remaining text without marks
+              if (cursor < newThought.body.length) {
+                breakTextAndPushToContent(newThought.body.substring(cursor), nodes, state.schema);
+              }
+            } else {
+              nodes = breakTextAndPushToContent(newThought.body, [], state.schema)
+            }
             const updatedThoughtNode = state.schema.nodes.thought.createAndFill(
               {
                 id: newThought.id,
                 index: newThought.index,
                 metadata: newThought.metadata,
               },
-              // marks is an array of [length, markJSON] where markJSON is the serialized mark
-              // of length length or null if there are no marks for that range.
-              // create an array of text elements, each with the appropriate marks
-              newThought.metadata?.marks
-                ? newThought.metadata.marks.reduce((acc, [length, markDefs]) => {
-                    const text = newThought.body.substring(cursor, cursor + length);
-                    let marks = [];
-
-                    if (markDefs !== null) {
-                      markDefs.forEach((markDef) => {
-                        if (markDef.type) {
-                          const markType = state.schema.marks[markDef.type];
-                          if (markType) {
-                            marks.push(markType.create(markDef.attrs));
-                          }
-                        }
-                      });
-
-                      acc.push(state.schema.text(text, marks));
-                    } else {
-                      acc.push(state.schema.text(text));
-                    }
-                    cursor += length; // Move the cursor forward
-                    return acc;
-                  }, [])
-                : state.schema.text(newThought.body)
+              nodes
             );
 
             if (updatedThoughtNode) {
@@ -754,10 +804,17 @@ function App() {
         doc: { content: "thought+" },
         thought: {
           attrs: { id: { default: uuidv4() }, index: { default: 0 }, metadata: { default: null } },
-          content: "text*",
+          content: "inline*",
           toDOM: () => ["p", { style: "border-bottom: thin #393939 solid" }, 0],
         },
-        text: {},
+        text: {group: "inline"},
+        soft_break: {
+          inline: true,
+          group: "inline",
+          selectable: false,
+          parseDOM: [{tag: "br"}],
+          toDOM() { return ["br"]; },
+        },
       },
       marks: {
         highlight: {
@@ -778,13 +835,13 @@ function App() {
 
       if (thought.body) {
         // Initialize an empty array to hold the content of the thought node
-        let content = [];
+        let content: ProseMirrorNode[] = [];
         let cursor = 0; // A cursor to track our position as we apply marks
 
         if (thoughtAttrs.metadata && thoughtAttrs.metadata.marks) {
           thoughtAttrs.metadata.marks.forEach(([length, markDefs]) => {
             const text = thought.body.substring(cursor, cursor + length);
-            let marks = [];
+            let marks: Mark[] = [];
 
             if (markDefs !== null) {
               markDefs.forEach((markDef) => {
@@ -796,20 +853,22 @@ function App() {
                 }
               });
 
-              content.push(schema.text(text, marks));
+              breakTextAndPushToContent(text, content, schema, marks);
             } else {
-              content.push(schema.text(text));
+              breakTextAndPushToContent(text, content, schema);
             }
             cursor += length; // Move the cursor forward
           });
 
           // Handle any remaining text without marks
           if (cursor < thought.body.length) {
-            content.push(schema.text(thought.body.substring(cursor)));
+            breakTextAndPushToContent(thought.body.substring(cursor), content, schema);
           }
         } else {
           // If there are no marks, just create a text node with the entire body
-          content = [schema.text(thought.body)];
+          let c: ProseMirrorNode[] = [];
+          breakTextAndPushToContent(thought.body, c, schema);
+          content = c;
         }
 
         return schema.nodes.thought.create(thoughtAttrs, content);
@@ -824,6 +883,7 @@ function App() {
       schema,
       plugins: [
         removeHighlightOnInputPlugin,
+        shiftEnterKeyPlugin,
         enterKeyPlugin,
         ctrlEnterKeyPlugin,
         backspaceKeyPlugin,
