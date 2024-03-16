@@ -476,12 +476,11 @@ const handleThought = async (thought: Thought) => {
       .eq("id", thought.id)
       .eq("agent_name", agentName);
   } else {
-    console.log("exiting handleThought since this isn't an ACTION or it doesn't *needs_handling*\n--");
     return;
   }
-  console.log("handling an ACTION that *needs_handling*: ", thought.body);
-  // get all thoughts up and including the one being handled:w
+  console.log("handling an ACTION that *needs_handling*. id: ", thought.id, ", index: ", thought.index, thought.body.slice(0, 100) + "...");
 
+  // get all thoughts up and including the one being handled
   const { data: thoughts, error } = await supabase
     .from("thoughts")
     .select("*")
@@ -531,7 +530,6 @@ supabase
       table: "thoughts",
     },
     async (payload) => {
-      console.log("Got a new thought: ", payload.new);
       if ("body" in payload.new) {
         handleThought(payload.new);
       }
