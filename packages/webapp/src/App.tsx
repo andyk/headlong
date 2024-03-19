@@ -202,6 +202,7 @@ function App() {
       includeSysMessage ? options.sysMessage : "",
       options.userMessage,
       options.assistantMessages)
+    console.log("templatedChat ", templatedChat);
     console.log("templates match ", templatedChat == templatedChat2);
 
     const completion = hf.textGenerationStream({
