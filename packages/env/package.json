@@ -4,8 +4,8 @@
   "description": "A process that provides actuation and sensory input for a headlong agent. Operates by listening to the headlong var, executing actions, and updating the headlong var with observations.",
   "main": "index.js",
   "scripts": {
-    "bashServer": "npx ts-node bashServer.ts",
-    "bashCLI": "npx ts-node bashServerCLI.ts",
+    "terminalServer": "npx ts-node terminalServer.ts",
+    "terminalServerCLI": "npx ts-node terminalServerCLI.ts",
     "env": "DOTENV_CONFIG_PATH=../../.env node -r ts-node/register -r dotenv/config main.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
