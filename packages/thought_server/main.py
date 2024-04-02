@@ -6,8 +6,6 @@ from huggingface_hub import InferenceClient
 from transformers import AutoTokenizer, PreTrainedTokenizer
 from pydantic import BaseModel
 import asyncio
-import os
-import json
 import yaml
 
 app = FastAPI()
@@ -23,15 +21,23 @@ app.add_middleware(
 
 # Put userMessage before/after each assistantMessage and append sysMessage (if given) to the beginning
 #  [assist0, assist1, assist2] -> [sys, user, assist0, user, assist1, user]
-def prompted_thought_stream(system_message, user_message, assistant_messages):
+# If model doesn't accept a system message, include it with the first user message
+#  [assist0, assist1, assist2] -> [sys + "\n" + user, assist0, user, assist1, user]
+def prompted_thought_stream(
+    system_message, user_message, assistant_messages, accepts_system_message
+):
     all_messages = []
-    if system_message:
+    if accepts_system_message:
         all_messages.append({"role": "system", "content": system_message})
+        all_messages.append({"role": "user", "content": user_message})
+    else:
+        all_messages.append(
+            {"role": "user", "content": system_message + "\n" + user_message}
+        )
     for message in assistant_messages:
         if message:
-            all_messages.append({"role": "user", "content": user_message})
             all_messages.append({"role": "assistant", "content": message})
-    all_messages.append({"role": "user", "content": user_message})
+            all_messages.append({"role": "user", "content": user_message})
     return all_messages
 
 
@@ -50,15 +56,11 @@ class OpenAIThinker(Thinker):
     async def streamer(self, system_message, user_message, assistant_messages):
 
         all_messages = prompted_thought_stream(
-            system_message if self.accepts_system_prompt else "",
-            user_message,
-            assistant_messages,
+            system_message, user_message, assistant_messages, self.accepts_system_prompt
         )
-
         chat_completion = self.client.chat.completions.create(
             model=self.openai_model_id, messages=all_messages, stream=True
         )
-
         print("Response:", end="", flush=True)
         for chunk in chat_completion:
             content = chunk.choices[0].delta.content
@@ -79,11 +81,12 @@ class HuggingfaceThinker(Thinker):
     async def streamer(self, system_message, user_message, assistant_messages):
 
         all_messages = prompted_thought_stream(
-            system_message if self.accepts_system_prompt else "",
-            user_message,
-            assistant_messages,
+            system_message, user_message, assistant_messages, self.accepts_system_prompt
         )
-        prompt = self.tokenizer.apply_chat_template(all_messages, tokenize=False)
+        prompt = self.tokenizer.apply_chat_template(
+            all_messages, add_generation_prompt=True, tokenize=False
+        )
+        print("prompt", prompt)
         chat_completion = self.client.text_generation(
             prompt, max_new_tokens=100, stream=True
         )
