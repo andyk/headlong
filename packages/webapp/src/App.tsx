@@ -1019,6 +1019,7 @@ function App() {
     });
 
     const waitTime = usePostActionWaitTime ? POST_ACTION_WAIT_TIME : INTER_THOUGHT_WAIT_TIME
+    console.error("setting timer for next thought in ", waitTime, "ms");
     setTimeout(
       () => { setGenerationTrigger((new Date()).getTime() + waitTime) },
       usePostActionWaitTime ? POST_ACTION_WAIT_TIME : INTER_THOUGHT_WAIT_TIME

@@ -7,6 +7,7 @@ import { JSDOM } from "jsdom";
 import twilioSDK from "twilio";
 import net from "net";
 import supabase from "./supabase";
+import { registerThoughtHandler } from './headlong';
 import { v4 as uuidv4 } from "uuid";
 import { Database } from "./database.types";
 
@@ -519,48 +520,23 @@ const handleThought = async (thought: Thought) => {
   }
 };
 
-// use supabase client `supabase` to subscribe to the thoughts windowle
-supabase
-  .channel("any")
-  .on<Thought>(
-    "postgres_changes",
-    {
-      event: "*",
-      schema: "public",
-      table: "thoughts",
-    },
-    async (payload) => {
-      if ("body" in payload.new) {
-        handleThought(payload.new);
-      }
-    }
-  )
-  .subscribe();
-
+const [envChannel, presenceChannel] = registerThoughtHandler(handleThought, "env");
 console.log("");
 
-const envPresenceRoom = supabase.channel("env_presence_room", {
-  config: {
-    presence: {
-      key: "env",
-    },
-  },
-});
-envPresenceRoom
-  .on("presence", { event: "sync" }, () => {
-    const newState = envPresenceRoom.presenceState();
-  })
-  .on("presence", { event: "join" }, ({ key, newPresences }) => {
-    console.log("env_presence_room had a join", key, newPresences);
-  })
-  .on("presence", { event: "leave" }, ({ key, leftPresences }) => {
-    console.log("env_presence_room had a leave", key, leftPresences);
-  })
-  .subscribe(async (status) => {
-    if (status === "SUBSCRIBED") {
-      await envPresenceRoom.track({ online_at: new Date().toISOString() });
-    }
-  });
+if (presenceChannel !== null) {
+  presenceChannel
+    .on("presence", { event: "join" }, ({ key, newPresences }) => {
+      console.log("env_presence_room had a join", key, newPresences);
+    })
+    .on("presence", { event: "leave" }, ({ key, leftPresences }) => {
+      console.log("env_presence_room had a leave", key, leftPresences);
+    })
+    .subscribe(async (status) => {
+      if (status === "SUBSCRIBED") {
+        await presenceChannel.track({ online_at: new Date().toISOString() });
+      }
+    });
+}
 console.log("registered tools:\n", Object.keys(tools).join("\n"));
 // TODO: Register any env listeners that would async interrupt "observations: "
 // (or other thoughts?) into consciouness
