@@ -9,9 +9,7 @@ import { Plugin, TextSelection } from "prosemirror-state";
 import { undo, redo, history } from "prosemirror-history";
 import supabase from "./supabase";
 import { v4 as uuidv4 } from "uuid";
-import openai from "./openai";
-import {hf, tokenizer} from "./huggingface";
-import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { getModels, streamThought } from "./thought_streamer";
 import { throttle } from "lodash";
 import { Database } from "./database.types";
 import "prosemirror-view/style/prosemirror.css";
@@ -21,6 +19,8 @@ const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
 const INTER_THOUGHT_WAIT_TIME = 5000;
 const POST_ACTION_WAIT_TIME = 10000;
+
+const models: string[] = await getModels();
 
 type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
 
@@ -73,7 +73,7 @@ const removeHighlightOnInputPlugin = new Plugin({
 });
 
 function breakTextAndPushToContent(text: string, content: ProseMirrorNode[], schema: Schema, marks?: Mark[]): ProseMirrorNode[] {
-  console.log("breakTextAndPushToContent handling text: ", text, " with marks: ", marks)
+  // console.log("breakTextAndPushToContent handling text: ", text, " with marks: ", marks)
   const brokenText = text.split("\n");
   brokenText.forEach((line, index) => {
     if (index > 0) {
@@ -98,137 +98,13 @@ function App() {
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modelSelection, setModelSelection] = useState("GPT4");
+  const [modelSelection, setModelSelection] = useState(models[0]);
   const [modelTemperature, setModelTemperature] = useState(0.5);
   const [envStatus, setEnvStatus] = useState("detached");
   const [thoughtIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
   const [generatingLoopOn, setGeneratingLoopOn] = useState(false); // Use this to control the generation loop
   const [generationTrigger, setGenerationTrigger] = useState<number | null>(null);
   const [msTillNextThought, setMsTillNextThought] = useState<number | null>(null);
-
-  // Put userMessage before/after each assistantMessage and append sysMessage (if given) to the beginning
-  // [assist0, assist1, assist2] -> [sys, user, assist0, user, assist1, user]
-  function promptedThoughtStream(
-    sysMessage: string,
-    userMessage: string,
-    assistantMessages: string[]) {
-      const allMessages = [];
-      if (sysMessage) {
-        allMessages.push({role: 'system', content: sysMessage});
-      }
-      for (const message of assistantMessages) {
-        if (message) {
-          allMessages.push({role: 'user', content: userMessage});
-          allMessages.push({role: 'assistant', content: message});
-        }
-      }
-      allMessages.push({role: 'user', content: userMessage});
-      return allMessages;
-    }
-
-    // Format thought stream according to the Llama chat template. No dependency on Transformers lib
-    function getLlamaTemplatedChat(
-      sysMessage: string,
-      userMessage: string,
-      assistantMessages: string[]
-    ){
-      let templatedChat = "<s>[INST] ";
-      if (sysMessage) {
-        templatedChat = templatedChat.concat("<<SYS>>\n", sysMessage, "\n<</SYS>>\n\n");
-      }
-      templatedChat = templatedChat.concat(userMessage, " [/INST]");
-
-      for (const message of assistantMessages) {
-        if (message) {
-          templatedChat = templatedChat.concat(" ", message.trim(), " </s><s>[INST] ", userMessage, " [/INST]");
-        }          
-      }
-      return templatedChat;
-    }
-
-  async function gpt4TurboChat(options: {
-    sysMessage: string;
-    userMessage: string;
-    assistantMessages: string[];
-    max_tokens?: number;
-    temperature?: number;
-    stream?: boolean;
-    onDelta: (delta: any) => void;
-  }): Promise<any> {
-    return new Promise(async (resolve, reject) => {
-      try {
-        const allMessageParams = promptedThoughtStream(options.sysMessage, options.userMessage, options.assistantMessages);
-        const completion = await openai.chat.completions.create({
-          model: "gpt-4-turbo-preview",
-          messages: allMessageParams as ChatCompletionMessageParam[],
-          max_tokens: options.max_tokens ?? 100,
-          temperature: options.temperature ?? 0.5,
-          stream: options.stream ?? true,
-        });
-        const stream = completion as AsyncIterable<any>;
-        for await (const chunk of stream) {
-          const delta = chunk.choices[0]?.delta?.content || "";
-          options.onDelta(delta); // Invoke the callback with the incoming delta
-        }
-
-        resolve(completion); // Resolve the promise after the stream is fully processed
-      } catch (error) {
-        reject(error); // Reject the promise if there's an error
-      }
-    });
-  }
-
-  async function huggingFaceChat(options: {
-    sysMessage: string;
-    userMessage: string;
-    assistantMessages: string[];
-    max_tokens?: number;
-    temperature?: number;
-    stream?: boolean; // Add stream option
-    onDelta: (delta: any) => void; // Callback to handle incoming data
-  }) {
-    const includeSysMessage = true;
-    const templatedChat =
-      tokenizer.apply_chat_template(
-        promptedThoughtStream(
-          includeSysMessage ? options.sysMessage : "",
-          options.userMessage,
-          options.assistantMessages),
-        { tokenize: false,
-          add_generation_prompt: false,
-          return_tensor: false,
-        });
-    const templatedChat2 = getLlamaTemplatedChat(
-      includeSysMessage ? options.sysMessage : "",
-      options.userMessage,
-      options.assistantMessages)
-    console.log("templates match ", templatedChat == templatedChat2);
-
-    const completion = hf.textGenerationStream({
-      inputs: templatedChat,
-      parameters: {
-        max_new_tokens: options.max_tokens ?? 100,
-        temperature: options.temperature ?? 0.5,
-        return_full_text: false,
-        // repetition_penalty: 1,
-      }
-    },
-    { wait_for_model: true});
-
-    let reply = "";
-    const stream = completion as AsyncIterable<any>;
-    for await (const chunk of stream) {
-      const delta = chunk.token?.text || "";
-      reply = reply.concat(delta);
-      // Llama always finishes assistant completions with </s>, so it should be the last delta
-      if (delta != "</s>") {
-        options.onDelta(delta); // Invoke the callback with the incoming delta
-      }
-    }
-    console.log("Reply:\n", reply);
-
-    return completion;
-  }
 
   function computeNewThoughtIndex(state: EditorState, appendToEnd?: boolean) {
     let newThought = null;
@@ -1025,7 +901,7 @@ function App() {
       0,
       thoughts.findIndex(([id, _]) => id === currThoughtId)
     );
-    const sysMessage = "You are going to do some thinking on your own. Try to be conscious of your own thoughts so you can tell them to me one by one. Observations are injected into your stream of thoughts fromthe outside world so you should never come up with a thought that starts with 'observation:'";
+    const sysMessage = "You are going to do some thinking on your own. Try to be conscious of your own thoughts so you can tell them to me one by one. Observations are injected into your stream of thoughts from the outside world so you should never come up with a thought that starts with 'observation:'";
     const userMessage = "What is your next thought?";
     const assistantMessages: string[] = thoughtsBeforeCurr.map(([_, body]) => {return body;});
     console.log("Assistant Messages: ", assistantMessages);
@@ -1067,14 +943,16 @@ function App() {
     }
 
     const chatArgs = {
+      model: modelSelection,
       sysMessage: sysMessage,
       userMessage: userMessage,
       assistantMessages: assistantMessages,
       temperature: modelTemperature,
       stream: true,
-      onDelta: appendToGeneratedThought
+      onDelta: appendToGeneratedThought,
     };
-    modelSelection === "GPT4" ? await gpt4TurboChat(chatArgs) : await huggingFaceChat(chatArgs);
+    await streamThought(chatArgs);
+
     // After the new text is fully generated by the LLM
     const obsRewriteTr = editorViewRef.current.state.tr;
     let newThoughtPos: null | number = null;
@@ -1099,6 +977,7 @@ function App() {
       const rewriteObsSysMessage = "Your job is to look at the series of thoughts, and then you will be shown a hypothetical observation with the format of 'observation: ...' which represents what you expect to observe next, and then reformat that observation into a more naturally worded reflection about your expect of what will come next.";
       const rewriteObsUserMessage = "please rewrite the following so that it does not start with 'observation: ' and intead is a more naturally worded inner thought about your prediction of what you think will happen next...\n" + observation;
       const rewriteObsChatArgs = {
+        model: modelSelection,
         sysMessage: rewriteObsSysMessage,
         userMessage: rewriteObsUserMessage,
         assistantMessages: assistantMessages,
@@ -1110,7 +989,7 @@ function App() {
       obsRewriteTr.delete(newThoughtPos, newThoughtPos + newThought.nodeSize);
       //apply obsRewriteTr to the editorView
       editorViewRef.current.dispatch(obsRewriteTr);
-      modelSelection === "GPT4" ? await gpt4TurboChat(rewriteObsChatArgs) : await huggingFaceChat(rewriteObsChatArgs);
+      await streamThought(rewriteObsChatArgs);
     }
     // then mark the new thought as needs_handling = true
     let pos = null;
@@ -1274,22 +1153,19 @@ function App() {
           */}
         </div>
         <div className="flex items-center">
-          {import.meta.env.VITE_HF_API_KEY && import.meta.env.VITE_HF_LLAMA_ENDPOINT && (
-            <>
-              <label htmlFor="modelSelection" className="ml-3">
-                Model:{" "}
-              </label>
-              <select
-                id="modelSelection"
-                value={modelSelection}
-                onChange={(e) => setModelSelection(e.target.value)}
-                className="ml-1"
-              >
-                <option value="GPT4">GPT4</option>
-                <option value="Headlong 7B">Headlong 7B</option>
-              </select>
-            </>
-          )}
+          <label htmlFor="modelSelection" className="ml-3">
+            Model:{" "}
+          </label>
+          <select
+            id="modelSelection"
+            value={modelSelection}
+            onChange={(e) => setModelSelection(e.target.value)}
+            className="ml-1"
+          >
+            {models.map(
+              key => (<option key={key} value={key}>{key}</option>)
+            )}
+          </select>
           <label htmlFor="modelTemperature" className="ml-3">
             Temperature:{" "}
           </label>
