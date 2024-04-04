@@ -29,3 +29,5 @@ packages/env/bash_history
 
 *.env
 env
+
+thinkers.yaml
