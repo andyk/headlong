@@ -3,7 +3,7 @@ A simple http service that hosts LLM models and provides API that uses them to g
 To run:
 
 ```
-cd packages though_server
+cd packages/though_server
 
 # Make sure you have a `thinkers.yaml` file with your LLM API service providers set up
 
