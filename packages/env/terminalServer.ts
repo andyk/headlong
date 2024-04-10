@@ -1,5 +1,5 @@
 import { createServer, Socket } from 'net';
-import { VirtualTerminal } from './vtlib';
+import { VirtualTerminal } from './htlib';
 
 import { throttle } from 'lodash';
 
@@ -27,7 +27,7 @@ function writeToSockets(msg: string) {
   });
 }
 
-function newWindow(payload: any) {
+async function newWindow(payload: any): Promise<void> {
   const { windowID, shellPath: shellPath = '/bin/bash', shellArgs: shellArgs = [] } = payload;
   const id = windowID || `window-${Math.random().toString(36).substring(7)}`;
 
@@ -39,7 +39,7 @@ function newWindow(payload: any) {
       env: process.env,
     }
   })
-  termApp.windows[id] = vt;
+  termApp.windows[id] = await vt.start();
   termApp.activeWindowID = id;
 
   writeToSockets(`observation: created window with ID ${id} and made it active window.`);
@@ -107,7 +107,7 @@ function listWindows() {
   }
 }
 
-function lookAtActiveWindow() {
+async function lookAtActiveWindow() {
   const windowIDs = Object.keys(termApp.windows);
   if (windowIDs.length === 0) {
     console.log('observation: there are no windows open.');
@@ -116,7 +116,7 @@ function lookAtActiveWindow() {
   } else {
     // Send the history of the active window to the socket.
     const activeWindow = termApp.windows[termApp.activeWindowID];
-    writeToSockets(`observation: window ${termApp.activeWindowID}:\n${activeWindow.history.join('')}`);
+    writeToSockets(`observation: window ${termApp.activeWindowID}:\n${await activeWindow.getView()}`);
   }
 }
 

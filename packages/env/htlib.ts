@@ -1,5 +1,8 @@
 import { spawn, ChildProcessWithoutNullStreams } from "child_process";
 
+const HT_BINARY = "ht";
+const HT_SIZE_FLAG = "--size";
+
 interface VirtualTerminalConfig {
     size?: string;
     binary?: string;
@@ -22,11 +25,11 @@ export class VirtualTerminal {
     }
 
     async start(): Promise<this> {
-        const cmd = ["vt", "--size", this.size, this.binary, ...this.binaryArgs];
+        const cmd = [HT_BINARY, HT_SIZE_FLAG, this.size, this.binary, ...this.binaryArgs];
         this.process = spawn(cmd[0], cmd.slice(1), this.spawnOptions);
 
         this.process.on("error", (err) => {
-            console.error(`Failed to start subprocess: ${err}`);
+            console.error(`Failed to start subprocess: ${err}. make sure `);
             this.process = null;
         });
 
@@ -49,6 +52,7 @@ export class VirtualTerminal {
     }
 
     async getView(): Promise<string> {
+        // a view should come back in as an object {view: <viewpane screenshot as string>}
         await this.sendCommand({ "type": "getView" });
         // throw errror if process is null
         if (this.process === null) {
@@ -58,7 +62,11 @@ export class VirtualTerminal {
             const data = await new Promise<string>(resolve => {
                 this.process!.stdout.once("data", resolve);
             });
-            return JSON.parse(data);
+            const parsedReply = JSON.parse(data);
+            if (!("view" in parsedReply)) {
+                throw new Error("View not found in reply.");
+            }
+            return parsedReply["view"];
         }
     }
 
@@ -84,13 +92,13 @@ export class VirtualTerminal {
     }
 }
 
-// Example usage
-(async () => {
-    const vterm = new VirtualTerminal();
-    await vterm.start();
-    await vterm.input("nano\n");
-    setTimeout(async () => {
-        console.log(await vterm.getView());
-        await vterm.close();
-    }, 200); // setTimeout to ensure command execution before getView
-})();
+//// Example usage
+//(async () => {
+//    const vterm = new VirtualTerminal();
+//    await vterm.start();
+//    await vterm.input("nano\n");
+//    setTimeout(async () => {
+//        console.log(await vterm.getView());
+//        await vterm.close();
+//    }, 200); // setTimeout to ensure command execution before getView
+//})();
