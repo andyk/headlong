@@ -1,6 +1,9 @@
 import asyncio
 import json
 
+HT_BINARY = "ht"
+HT_SIZE_FLAG = "--size"
+
 class VirtualTerminal:
     def __init__(self, binary='/bin/bash', binary_args=None, size='120x40', **exec_kwargs):
         self.binary = binary
@@ -11,7 +14,7 @@ class VirtualTerminal:
 
     async def start(self):
         try:
-            cmd = ['vt', '--size', self.size, self.binary] + self.binary_args
+            cmd = [HT_BINARY, HT_SIZE_FLAG, self.size, self.binary] + self.binary_args
             self.process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
