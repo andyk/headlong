@@ -45,16 +45,16 @@ tsconfig.json.
     "compilerOptions": {
       "strict": false,
       "target": "es2022", // "es2018",                                  /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
-      "module": "CommonJS", // "es2022",                                /* Specify what module code is generated. */
+      "module": "NodeNext", // "es2022",                                /* Specify what module code is generated. */
       "moduleResolution": "nodenext",
       "outDir": "./lib", 
-      "rootDir": "./src", 
+      "rootDir": "./", 
       "sourceMap": true,                                /* Create source map files for emitted JavaScript files. */
       "esModuleInterop": true,                             /* Emit additional JavaScript to ease support for importing CommonJS modules. This enables 'allowSyntheticDefaultImports' for type compatibility. */
       "skipLibCheck": true,                                 /* Skip type checking all .d.ts files. */
       "isolatedModules": true,
       "jsx": "react",
     },
-    "include": ["src/**/*.ts"],
+    "include": ["./**/*.ts"],
     "exclude": ["node_modules"]
   }
