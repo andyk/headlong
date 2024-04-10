@@ -79,6 +79,7 @@ function runCommand(payload: any) {
   }
   const { command } = payload;
   termApp.windows[termApp.activeWindowID].input(`${command}\n`);
+  lookAtActiveWindow();
 }
 
 function switchToWindow(payload: any) {
