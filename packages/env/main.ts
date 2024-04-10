@@ -13,6 +13,8 @@ import { Database } from "./database.types";
 
 type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
 
+const NUM_THOUGHTS_TO_CONSIDER = 20;
+
 const ENV_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
 
 const bashServerPort = Number(process.env.BASH_SERVER_PORT) || 3031;
@@ -68,7 +70,7 @@ If you don't think you know of any functions that are appropriate for this actio
 When deciding on what action take, use on the following stream of recent thoughts for context:`,
   };
   const thoughtListStr = thoughtList
-    .slice(0, thoughtList.length - 1)
+    .slice(Math.max(0,thoughtList.length-NUM_THOUGHTS_TO_CONSIDER), thoughtList.length - 1)
     .map((thought) => {
       return thought.body;
     })
