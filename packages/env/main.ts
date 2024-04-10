@@ -17,8 +17,6 @@ const ENV_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling th
 
 const bashServerPort = Number(process.env.BASH_SERVER_PORT) || 3031;
 
-const supabaseUrlEnvName = "SUPABASE_URL_HEADLONG";
-const supabaseKeyEnvName = "SUPABASE_SERVICE_ROLE_KEY_HEADLONG";
 const openAIMaxTokens = 500;
 const openAITemp = 0.5;
 
@@ -36,19 +34,11 @@ if (agentName === undefined) {
 }
 console.log("agentName: ", agentName);
 
-const thoughtsToOpenAIChatMessages = (thoughts: any, systemMsg: string = "") => {
-  const messages = thoughts.map(([thought, history]) => ({ role: "assistant", content: thought.body }));
-  if (systemMsg) {
-    return [{ role: "system", content: systemMsg }, ...messages];
-  }
-  return messages;
-};
-
-const bashServerClient = net.createConnection({ port: bashServerPort }, () => {
+const terminalServerClient = net.createConnection({ port: bashServerPort }, () => {
   console.log("connected to bashServer on port ", bashServerPort);
 });
 
-bashServerClient.on("end", () => {
+terminalServerClient.on("end", () => {
   console.log("disconnected from server");
 });
 
@@ -59,9 +49,22 @@ const generateMessages = (thoughtList: Thought[]) => {
   }
   const systemMsg: ChatCompletionMessageParam = {
     role: "system",
-    content: `your job is to consider your recent thoughts and then take an action.
-The way you take actions is by calling a function.
+    content: `Your job is to consider your recent thoughts and then take an action.
+The way you take action is by calling one of the following functions with appropriate arguments.
+
+- searchGoogle - use this to search the web using google. the search results are returned.
+- visitURL - this allows you to fetch the human readable contents of a website.
+- newWindow - this allows you to create a new terminal window. You probably don't need to do this very often
+- switchToWindow - this allows you to make another terminal window the active window. you need to provide the ID of the window you want to make active
+- executeWindowCommand - this is the main way you interact with the terminal. you provide a command and it gets executed in the active window
+- listWindows - this allows you to see the IDs of all the open terminal windows
+- whichWindowActive - this allows you which terminal window is currently active. it returns the ID of the active window.
+- lookAtActiveWindow - this allows you to see the contents of the active terminal window
+- sendText - this allows you to send a text message to a phone number. you need to provide the phone number and the message
+- checkTime - this allows you to see what time it is right now.
+
 If you don't think you know of any functions that are appropriate for this action, you can say "observation: i don't know how to do that".
+
 When deciding on what action take, use on the following stream of recent thoughts for context:`,
   };
   const thoughtListStr = thoughtList
@@ -171,7 +174,7 @@ const tools = {
   },
   newWindow: {
     execute: async (args: object, addThought: (thought: string) => void) => {
-      bashServerClient.write(
+      terminalServerClient.write(
         JSON.stringify({
           type: "newWindow",
           payload: {
@@ -213,7 +216,7 @@ const tools = {
   },
   switchToWindow: {
     execute: async (args: object, addThought: (thought: string) => void) => {
-      bashServerClient.write(
+      terminalServerClient.write(
         JSON.stringify({
           type: "switchToWindow",
           payload: { id: args["id"] },
@@ -239,7 +242,7 @@ const tools = {
   },
   executeWindowCommand: {
     execute: async (args: object, addThought: (thought: string) => void) => {
-      bashServerClient.write(
+      terminalServerClient.write(
         JSON.stringify({
           type: "runCommand",
           payload: { command: args["command"] },
@@ -265,7 +268,7 @@ const tools = {
   },
   listWindows: {
     execute: async (args: object, addThought: (thought: string) => void) => {
-      bashServerClient.write(
+      terminalServerClient.write(
         JSON.stringify({
           type: "listWindows",
           payload: {},
@@ -286,7 +289,7 @@ const tools = {
   },
   whichWindowActive: {
     execute: async (args: object, addThought: (thought: string) => void) => {
-      bashServerClient.write(
+      terminalServerClient.write(
         JSON.stringify({
           type: "whichWindowActive",
           payload: {},
@@ -307,7 +310,7 @@ const tools = {
   },
   lookAtActiveWindow: {
     execute: async (args: object, addThought: (thought: string) => void) => {
-      bashServerClient.write(
+      terminalServerClient.write(
         JSON.stringify({
           type: "lookAtActiveWindow",
           payload: {}
@@ -456,7 +459,7 @@ async function addNewThought(agentName: string, body: string, addAfterIndex?: nu
   }
 }
 
-bashServerClient.on("data", (data) => {
+terminalServerClient.on("data", (data) => {
   console.log(data.toString());
   addNewThought(agentName, data.toString());
 });
