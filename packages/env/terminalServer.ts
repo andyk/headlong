@@ -73,7 +73,8 @@ function writeToStdin(payload: any) {
 
 function runCommand(payload: any) {
   if (!termApp.activeWindowID) {
-    writeToSockets('observation: there are no windows open.');
+    writeToSockets('observation: there are no windows open. Opening a new window...');
+    newWindow({});
     return;
   }
   const { command } = payload;
