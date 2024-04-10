@@ -1,23 +1,18 @@
 import { createServer, Socket } from 'net';
-import { IPty, spawn } from 'node-pty'; // Import spawn from node-pty
+import { VirtualTerminal } from './vtlib';
+
 import { throttle } from 'lodash';
 
 const REFRESH_RATE = 2000; // in milliseconds
 
 const bashServerPort = Number(process.env.BASH_SERVER_PORT) || 3031;
 
-interface Window {
-  proc: IPty;
-  history: string[];  // history of window that has already been sent.
-  outputBuffer: string[];  // buffered output yet to be sent.
-}
-
-interface Env {
-  windows: { [id: string]: Window };
+interface TermApp {
+  windows: { [id: string]: VirtualTerminal };
   activeWindowID: string | null;
 }
 
-const env: Env = {
+const termApp: TermApp = {
   windows: {},
   activeWindowID: null,
 };
@@ -32,65 +27,35 @@ function writeToSockets(msg: string) {
   });
 }
 
-function pushNewOutputs() {
-  Object.entries(env.windows).forEach(([id, window]) => {
-    if (window.outputBuffer.length > 0) {
-      writeToSockets(`observation: window ${id}:\n${window.outputBuffer.join('')}`);
-      // apppend outputBuffer to history for this window and clear outputBUffer
-      window.history.push(...window.outputBuffer);
-      window.outputBuffer = [];
-    }
-  });
-};
-
-// Throttle the function to send updates to sockets
-const throttledPushNewOutputs = throttle(() => {
-  pushNewOutputs();
-}, REFRESH_RATE);
-
-function addOutputToBuffer(windowID: string, data: string) {
-  if (env.windows[windowID]) {
-    env.windows[windowID].outputBuffer.push(data);
-    throttledPushNewOutputs();
-  }
-}
-
 function newWindow(payload: any) {
   const { windowID, shellPath: shellPath = '/bin/bash', shellArgs: shellArgs = [] } = payload;
   const id = windowID || `window-${Math.random().toString(36).substring(7)}`;
 
-  // Using node-pty to spawn the window
-  env.windows[id] = {
-    proc: spawn(shellPath, shellArgs, {
-      name: 'xterm-color',
+  const vt = new VirtualTerminal({
+    binary: shellPath,
+    binaryArgs: shellArgs,
+    spawnOptions: {
       cwd: process.cwd(),
       env: process.env,
-    }),
-    history: [],
-    outputBuffer: [],
-  };
-  env.activeWindowID = id;
+    }
+  })
+  termApp.windows[id] = vt;
+  termApp.activeWindowID = id;
 
   writeToSockets(`observation: created window with ID ${id} and made it active window.`);
 
-  // Relay messages from the subprocess to the socket
-  env.windows[id].proc.onData((data) => {
-    console.log("hanlding onData event. data: ", data);
-    addOutputToBuffer(id, data);
-  });
-
-  env.windows[id].proc.onExit(({ exitCode, signal }) => {
+  termApp.windows[id].onExit(({ exitCode, signal }) => {
     writeToSockets(`observation: window '${id}' exited with code ${exitCode}, signal ${signal}.`);
     // Cleanup window from env.windows when it exits
-    delete env.windows[id];
-    if (env.activeWindowID === id) {
-      env.activeWindowID = null; // Reset active window ID if the exited window was active
+    delete termApp.windows[id];
+    if (termApp.activeWindowID === id) {
+      termApp.activeWindowID = null; // Reset active window ID if the exited window was active
     }
   });
 }
 
 function writeToStdin(payload: any) {
-  if (!env.activeWindowID) {
+  if (!termApp.activeWindowID) {
     writeToSockets('observation: there are no windows open.');
     return;
   }
@@ -103,22 +68,22 @@ function writeToStdin(payload: any) {
   // This replaces instances of "\\x" with "\x" to properly interpret the escape sequence
   input = input.replace(/\\x([0-9A-Fa-f]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
   console.log("writing input to active window: ", input);
-  env.windows[env.activeWindowID].proc.write(input);
+  termApp.windows[termApp.activeWindowID].input(input);
 }
 
 function runCommand(payload: any) {
-  if (!env.activeWindowID) {
+  if (!termApp.activeWindowID) {
     writeToSockets('observation: there are no windows open.');
     return;
   }
   const { command } = payload;
-  env.windows[env.activeWindowID].proc.write(`${command}\n`);
+  termApp.windows[termApp.activeWindowID].input(`${command}\n`);
 }
 
 function switchToWindow(payload: any) {
   const { id } = payload;
-  if (env.windows[id]) {
-    env.activeWindowID = id;
+  if (termApp.windows[id]) {
+    termApp.activeWindowID = id;
     writeToSockets(`observation: switched to window '${id}'.`);
   } else {
     writeToSockets(`observation: window '${id}' does not exist.`);
@@ -126,15 +91,15 @@ function switchToWindow(payload: any) {
 }
 
 function whichWindowActive() {
-  if (!env.activeWindowID) {
+  if (!termApp.activeWindowID) {
     writeToSockets('observation: there are no windows open.');
   } else {
-    writeToSockets(`observation: active window is '${env.activeWindowID}'.`);
+    writeToSockets(`observation: active window is '${termApp.activeWindowID}'.`);
   }
 }
 
 function listWindows() {
-  const windowIDs = Object.keys(env.windows);
+  const windowIDs = Object.keys(termApp.windows);
   if (windowIDs.length === 0) {
     writeToSockets('observation: there are no windows open.');
   } else {
@@ -143,15 +108,15 @@ function listWindows() {
 }
 
 function lookAtActiveWindow() {
-  const windowIDs = Object.keys(env.windows);
+  const windowIDs = Object.keys(termApp.windows);
   if (windowIDs.length === 0) {
     console.log('observation: there are no windows open.');
-  } else if (env.activeWindowID === null || env.activeWindowID === undefined) {
+  } else if (termApp.activeWindowID === null || termApp.activeWindowID === undefined) {
     console.log('observation: there is no active window.');
   } else {
     // Send the history of the active window to the socket.
-    const activeWindow = env.windows[env.activeWindowID];
-    writeToSockets(`observation: window ${env.activeWindowID}:\n${activeWindow.history.join('')}`);
+    const activeWindow = termApp.windows[termApp.activeWindowID];
+    writeToSockets(`observation: window ${termApp.activeWindowID}:\n${activeWindow.history.join('')}`);
   }
 }
 
