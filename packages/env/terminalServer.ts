@@ -71,15 +71,17 @@ function writeToStdin(payload: any) {
   termApp.windows[termApp.activeWindowID].input(input);
 }
 
-function runCommand(payload: any) {
+async function runCommand(payload: any) {
   if (!termApp.activeWindowID) {
     writeToSockets('observation: there are no windows open. Opening a new window...');
     newWindow({});
     return;
   }
   const { command } = payload;
-  termApp.windows[termApp.activeWindowID].input(`${command}\n`);
-  lookAtActiveWindow();
+  termApp.windows[termApp.activeWindowID].input(`${command}`);
+  await lookAtActiveWindow();
+  termApp.windows[termApp.activeWindowID].input(`\n`);
+  await lookAtActiveWindow();
 }
 
 function switchToWindow(payload: any) {
