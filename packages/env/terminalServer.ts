@@ -78,9 +78,9 @@ async function runCommand(payload: any) {
     return;
   }
   const { command } = payload;
-  termApp.windows[termApp.activeWindowID].input(`${command}`);
+  await termApp.windows[termApp.activeWindowID].input(`${command}`);
   await lookAtActiveWindow();
-  termApp.windows[termApp.activeWindowID].input(`\n`);
+  await termApp.windows[termApp.activeWindowID].input(`\n`);
   await lookAtActiveWindow();
 }
 
