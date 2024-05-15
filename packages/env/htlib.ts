@@ -48,7 +48,7 @@ export class VirtualTerminal {
     }
 
     async sendCommand(command: object): Promise<void> {
-        await this.sendStdin(JSON.stringify(command) + "\n");
+        await this.sendStdin(JSON.stringify(command) + "\r");
     }
 
     async getView(): Promise<string> {
