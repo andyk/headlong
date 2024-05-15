@@ -533,7 +533,9 @@ function App() {
             // any other attributes
           },
           newThought.body.split("\n").reduce((acc, text, index, array) => {
-            acc.push(state.schema.text(text));
+            if (text !== "") {
+              acc.push(state.schema.text(text));
+            }
             if (index < array.length - 1) {
               acc.push(state.schema.nodes.soft_break.create());
             }

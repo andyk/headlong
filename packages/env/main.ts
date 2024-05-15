@@ -242,6 +242,34 @@ const tools = {
       },
     },
   },
+  // typeWithKeyboard() allows an agent to type keyboard keys into the active window
+  // which makes it easy to send control sequences to the terminal like ctrl+x, ctrl+c, etc.
+  typeWithKeyboard: {
+    execute: async (args: object, addThought: (thought: string) => void) => {
+      terminalServerClient.write(
+        JSON.stringify({
+          type: "typeWithKeyboard",
+          payload: { keys: args["keys"] },
+        })
+      );
+    },
+    schema: {
+      type: "function" as "function",
+      function: {
+        name: "typeWithKeyboard",
+        description: "type at the keyboard into the active window",
+        parameters: {
+          type: "object",
+          properties: {
+            keys: {
+              type: "string",
+              description: "english description of what to type into the active window",
+            },
+          },
+        },
+      },
+    },
+  },
   executeWindowCommand: {
     execute: async (args: object, addThought: (thought: string) => void) => {
       terminalServerClient.write(
@@ -255,7 +283,7 @@ const tools = {
       type: "function" as "function",
       function: {
         name: "executeWindowCommand",
-        description: "run a command in the currently active window",
+        description: "run a command in the currently active window. A newline will be added at the end of the string",
         parameters: {
           type: "object",
           properties: {
@@ -437,6 +465,7 @@ async function addNewThought(agentName: string, body: string, addAfterIndex?: nu
       .limit(1)
       .maybeSingle();
     const maxIndex = row?.index || 0;
+    console.log("maxIndex: ", maxIndex, ", row?.index: ", row?.index);
     await supabase.from("thoughts").insert([{ agent_name: agentName, body: body, index: maxIndex + 1.0 }]);
   } else {
     const computedIndex = await computeInsertIndex(addAfterIndex);

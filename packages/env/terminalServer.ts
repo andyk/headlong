@@ -78,10 +78,11 @@ async function runCommand(payload: any) {
     return;
   }
   const { command } = payload;
-  await termApp.windows[termApp.activeWindowID].input(`${command}`);
-  await lookAtActiveWindow();
-  await termApp.windows[termApp.activeWindowID].input(`\n`);
-  await lookAtActiveWindow();
+  await termApp.windows[termApp.activeWindowID].input(`${command}\n`);
+  // sleep for 10ms and then call await lookAtActiveWindow()
+  setTimeout(async () => {
+    await lookAtActiveWindow();
+  }, 10);
 }
 
 function switchToWindow(payload: any) {

@@ -114,6 +114,16 @@ def parse_thinkers(configuration):
     thinkers: dict[str, Thinker] = {}
     for entry in configuration:
         match entry["type"]:
+            case "Llama370BInstruct":
+                thinkers[entry["name"]] = OpenAIThinker(
+                    client=OpenAI(
+                        base_url="https://openrouter.ai/api/v1",
+                        api_key=entry["api_key"],
+                    ),
+                    openai_model_id=entry["model_id"],
+                    accepts_system_prompt=entry["accepts_system_prompt"],
+                    end_token=entry["end_token"],
+                )
             case "OpenAI":
                 thinkers[entry["name"]] = OpenAIThinker(
                     client=OpenAI(
