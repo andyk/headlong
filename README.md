@@ -8,6 +8,8 @@ The environment is in `packages/env` - it's a node daemon written in Typescript.
 
 The environment uses GPT4 function calling to use tools, including a `terminalServer` that itself wraps `ht` ([headless terminal](github.com/andyk/ht`)).
 
+The webapp communicates with the environment via a Supabase `thoughts` table and Supabase's realtime system.
+
 
 ## install and run
 
@@ -31,5 +33,3 @@ npm run thoughtServer
 cd packages/env
 npm run env
 ```
-
-The webapp communicates with the environment via a Supabase `thoughts` table and Supabase's realtime system.
