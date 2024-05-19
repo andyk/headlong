@@ -1,4 +1,4 @@
-Headlong is a framework for human users to create and cureate high quality chain-of-thought datasets and use them in AI Agents.
+Headlong is a framework for human users to create and curate high quality chain-of-thought datasets and use them in AI Agents.
 
 The webapp frontend is in packages/webapp - it's a vite Typescript project.
 
