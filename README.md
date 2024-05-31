@@ -14,6 +14,9 @@ The webapp communicates with the environment via a Supabase `thoughts` table and
 ## install and run
 
 ```
+# Download latest ht binary from https://github.com/andyk/ht/releases/latest
+# and make sure it is on your path.
+
 cd packages/webapp
 npm install
 npm run dev
