@@ -18,9 +18,9 @@ client.on('data', (data) => {
 
 function askQuestion() {
     rl.question(`Enter command and args (if any)
-      o [n]ewWindow [windowID]
-      o run[C]ommand cmdline  # new line will be added after cmdline
-      o writeToStd[i]n cmd
+      o [n]ewWindow windowID
+      o type[I]nput input  # new line will be added after cmdline
+      o pressKeyboard[K]eys names of keys to press in key combo
       o [s]witchToWindow
       o [w]hichWindowActive
       o look[A]tActiveWindow
@@ -38,10 +38,10 @@ function askQuestion() {
                     {type: 'newWindow', payload: {windowID: args[0]}}
                 :
                     msg = {type: 'newWindow', payload: {}};
-            } else if (commandType === 'runCommand' || commandType.toLowerCase() === 'c') {
-                msg = {type: 'runCommand', payload: {command: new String(args.join(' '))}};
-            } else if (commandType === 'writeToStdin' || commandType.toLowerCase() === 'i') {
-                msg = {type: 'writeToStdin', payload: {input: new String(args.join(' '))}};
+            } else if (commandType === 'typeInput' || commandType.toLowerCase() === 'i') {
+                msg = {type: 'typeInput', payload: {input: new String(args.join(' '))}};
+            } else if (commandType === 'pressKeyboardKeys' || commandType.toLowerCase() === 'k') {
+                msg = {type: 'pressKeyboardKeys', payload: {keys: new String(args.join(' '))}};
             } else if (commandType === 'switchToWindow' || commandType.toLowerCase() === 's') {
                 msg = {type: 'switchToWindow', payload: {id: args}};
             } else if (commandType === 'whichWindowActive' || commandType.toLowerCase() === 'w') {

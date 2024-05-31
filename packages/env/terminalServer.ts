@@ -1,11 +1,17 @@
 import { createServer, Socket } from 'net';
 import { VirtualTerminal } from './htlib';
+import OpenAI from 'openai';
 
-import { throttle } from 'lodash';
+const openai = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env["OPENROUTER_API_KEY"],
+})
+
+//import { throttle } from 'lodash';
 
 const REFRESH_RATE = 2000; // in milliseconds
 
-const bashServerPort = Number(process.env.BASH_SERVER_PORT) || 3031;
+const terminalServerPort = Number(process.env.BASH_SERVER_PORT) || 3031;
 
 interface TermApp {
   windows: { [id: string]: VirtualTerminal };
@@ -54,7 +60,7 @@ async function newWindow(payload: any): Promise<void> {
   });
 }
 
-function writeToStdin(payload: any) {
+function typeInput(payload: any) {
   if (!termApp.activeWindowID) {
     writeToSockets('observation: there are no windows open.');
     return;
@@ -69,20 +75,28 @@ function writeToStdin(payload: any) {
   input = input.replace(/\\x([0-9A-Fa-f]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
   console.log("writing input to active window: ", input);
   termApp.windows[termApp.activeWindowID].input(input);
+  // sleep for 10ms and then call await lookAtActiveWindow()
+  setTimeout(async () => {
+    await lookAtActiveWindow();
+  }, 10);
 }
 
-async function runCommand(payload: any) {
+async function pressKeyboardKeys(payload: any) {
   if (!termApp.activeWindowID) {
     writeToSockets('observation: there are no windows open. Opening a new window...');
     newWindow({});
     return;
   }
-  const { command } = payload;
+  const { keys } = payload;
+  const joinedKeys = (keys as string[]).join(',');
+  const prompt = "convert the following keyboard key combo into the appropriate ascii character expressed as a hex string: [" + joinedKeys + ". just print the hex string (e.g., \\x...) and nothing else."
+  const command = await openai.chat.completions.create({
+    model: "openai/gpt-4o",
+    messages: [
+      { role: "user", content: prompt }
+    ],
+  })
   await termApp.windows[termApp.activeWindowID].input(`${command}\n`);
-  // sleep for 10ms and then call await lookAtActiveWindow()
-  setTimeout(async () => {
-    await lookAtActiveWindow();
-  }, 10);
 }
 
 function switchToWindow(payload: any) {
@@ -126,7 +140,7 @@ async function lookAtActiveWindow() {
 }
 
 server.on('connection', (socket) => {
-  console.log('bashServer: client connected');
+  console.log('terminalerver: client connected');
   sockets.push(socket);
 
   socket.on('data', (data) => {
@@ -138,11 +152,11 @@ server.on('connection', (socket) => {
       case 'newWindow':
         newWindow(payload);
         break;
-      case 'runCommand':
-        runCommand(payload);
+      case 'pressKeyboardKeys':
+        pressKeyboardKeys(payload);
         break;
       case 'writeToStdin':
-        writeToStdin(payload);
+        typeInput(payload);
         break;
       case 'switchToWindow':
         switchToWindow(payload);
@@ -170,8 +184,8 @@ server.on('connection', (socket) => {
   });
 });
 
-server.listen(bashServerPort, () => {
-  console.log(`bashServer listening on port ${bashServerPort}`);
+server.listen(terminalServerPort, () => {
+  console.log(`terminalServer listening on port ${terminalServerPort}`);
 });
 
 console.log("done running listen. registering process.on('SIGTERM')");
