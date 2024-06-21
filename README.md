@@ -1,4 +1,8 @@
 Headlong is a framework for human users to create and curate high quality chain-of-thought datasets and use them in AI Agents.
+<img src="https://github.com/andyk/headlong/assets/228998/2ef972f0-95d1-4dcf-b1c0-4e76247916fb" alt="screenshot of Headlong webapp" align="right" style="width:500px">
+
+
+## Architectural Parts
 
 The webapp frontend is in `packages/webapp` - it's a vite Typescript project.
 
