@@ -34,10 +34,14 @@ pip install -r requirements.txt
 # make sure you create or get a copy of thinkers.yaml and put it into ./
 . ./launch.sh
 
+## By default your webapp will connect to the main env running in EC2
+## via supabase realtime. If you want to override that and use a local
+## env, then you'll need to run the terminalServer and env locally.
+## We strongly recommend you run these in a docker instance.
 # in a new terminal 
 cd packages/env
 npm install
-npm run thoughtServer
+npm run terminalServer
 
 # in a new terminal 
 cd packages/env
