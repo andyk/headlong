@@ -32,7 +32,7 @@ virtualenv venv
 . ./venv/bin/activate
 pip install -r requirements.txt
 # make sure you create or get a copy of thinkers.yaml and put it into ./
-python thought_server.py
+. ./launch.sh
 
 # in a new terminal 
 cd packages/env
