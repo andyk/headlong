@@ -27,6 +27,7 @@ npm run dev
 
 # in a new terminal 
 cd packages/thought_server
+# You need python >= 3.10 since we use the `match` syntax. 
 virtualenv env
 pip install -r requirements.txt
 # make sure you create or get a copy of thinkers.yaml and put it into ./
