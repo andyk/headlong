@@ -28,7 +28,9 @@ npm run dev
 # in a new terminal 
 cd packages/thought_server
 virtualenv env
-./venv/bin/activate
+pip install -r requirements.txt
+# make sure you create or get a copy of thinkers.yaml and put it into ./
+. ./venv/bin/activate
 python thought_server.py
 
 # in a new terminal 
