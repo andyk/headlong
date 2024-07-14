@@ -17,6 +17,7 @@ import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { Auth } from "@supabase/auth-ui-react";
 import { ThemeSupa } from '@supabase/auth-ui-shared'
 import { SignOutButton } from './components/auth/Signout';
+import { ConnectionStatusIcon } from './components/ConnectionStatusIcon';
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
@@ -1049,6 +1050,8 @@ function App() {
     );
   };
 
+  const isEnvAttached = (envStatus === "attached");
+
   return !session
     ? (
       <div className="App flex flex-col max-h-screen">
@@ -1085,34 +1088,8 @@ function App() {
         <div className="flex-grow flex justify-end">
           {session && (<SignOutButton supabaseClient={supabase}/>)}
           <div className="flex items-center space-x-2 p-2 rounded-md">
-            {envStatus === "attached" ? (
-              <>
-                <span className="text-sm text-green-500">Environment</span>
-                {/* Online Icon */}
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5 text-green-500"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.293a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </>
-            ) : (
-              <>
-                <span className="text-sm text-red-500">Environment</span>
-                {/* Offline Icon: Red circle (outline) with a red "X" */}
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="9" stroke="#ef4444" fill="none" strokeWidth="2" />{" "}
-                  {/* Red outlined circle with black fill */}
-                  <path stroke="#ef4444" strokeLinecap="round" strokeWidth="2" d="M6 6l8 8m0 -8l-8 8" /> {/* Red X */}
-                </svg>
-              </>
-            )}
+            <span className={`text-sm text-${isEnvAttached ? 'green' : 'red'}-500`}>Environment</span>
+            <ConnectionStatusIcon connected={isEnvAttached}/>
           </div>
         </div>
       </div>
