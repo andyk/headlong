@@ -18,25 +18,37 @@ The webapp communicates with the environment via a Supabase `thoughts` table and
 ## install and run
 
 ```
+### == ht ==
 # Download latest ht binary from https://github.com/andyk/ht/releases/latest
 # and make sure it is on your path.
 
+### == thought server ==
+# You need python >= 3.10 since we use the `match` syntax.
+# make sure you create or get a copy of thinkers.yaml and put it into ./
+# Then in a new terminal 
+cd packages/thought_server
+virtualenv venv
+. ./venv/bin/activate
+pip install -r requirements.txt
+. ./launch.sh
+
+### == headlong UI webapp ==
 cd packages/webapp
 npm install
 npm run dev
 
-# in a new terminal (Requires python 3.10+)
-cd packages/thought_server
-virtualenv venv
-source ./venv/bin/activate
-pip install -r requirements.txt
-. ./launch.sh
+## By default your webapp will connect to the main env running in EC2
+## via supabase realtime. If you want to override that and use a local
+## env, then you'll need to run the terminalServer and env locally.
+## We strongly recommend you run these in a docker instance.
 
+### == terminal server ==
 # in a new terminal 
 cd packages/env
 npm install
 npm run terminalServer
 
+### == env daemon ==
 # in a new terminal 
 cd packages/env
 npm run env
