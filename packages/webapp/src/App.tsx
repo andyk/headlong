@@ -14,6 +14,9 @@ import { throttle } from "lodash";
 import { Database } from "./database.types";
 import "prosemirror-view/style/prosemirror.css";
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import { Auth } from "@supabase/auth-ui-react";
+import { ThemeSupa } from '@supabase/auth-ui-shared'
+import { SignOutButton } from './components/auth/Signout';
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
@@ -105,6 +108,7 @@ function App() {
   const [generatingLoopOn, setGeneratingLoopOn] = useState(false); // Use this to control the generation loop
   const [generationTrigger, setGenerationTrigger] = useState<number | null>(null);
   const [msTillNextThought, setMsTillNextThought] = useState<number | null>(null);
+  const [session, setSession] = useState(null)
 
   function computeNewThoughtIndex(state: EditorState, appendToEnd?: boolean) {
     let newThought = null;
@@ -255,7 +259,7 @@ function App() {
           thoughtIdsInSelection.add(node.attrs.id);
         }
       });
-  
+
       // Check if it's just a cursor position without a selection range.
       const isCursor = from === to;
       if (isCursor) {
@@ -269,13 +273,13 @@ function App() {
       } else {
         // Here you can handle the deletion of thoughts by their IDs.
         // For example, mark them for deletion in the database, update state, etc.
- 
+
         if (dispatch) {
           // Create and dispatch a transaction that deletes the selected range.
           const deleteTransaction = state.tr.delete(from, to);
           dispatch(deleteTransaction);
         }
-        
+
         // Return true to indicate that the backspace handler has done something,
         // preventing the default backspace behavior.
         retVal = true;
@@ -290,7 +294,7 @@ function App() {
       return true;
     },
   });
-  
+
   //const backspaceKeyPlugin = keymap({
   //  Backspace: (state, dispatch) => {
   //    // Use the joinBackward command directly
@@ -445,8 +449,25 @@ function App() {
     setThoughtIdsToUpdate(new Set());
   }
 
-  const throttlePushToDB = useMemo(() => throttle(pushToDB, 1000), []);
+  /**
+   * Auth
+   */
+  useEffect(() => {
+    // Get session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+    })
 
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+    })
+
+    // Remove auth listener on exit
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const throttlePushToDB = useMemo(() => throttle(pushToDB, 1000), []);
   useEffect(() => {
     if (thoughtIdsToUpdate.size === 0) {
       return;
@@ -794,7 +815,7 @@ function App() {
               return new Set(prev).add(currentThoughtId);
             });
           }
-        } 
+        }
         editorViewRef.current.updateState(newState);
       },
     });
@@ -911,7 +932,7 @@ function App() {
     async function appendToGeneratedThought(delta: string) {
       if (delta && editorViewRef.current) {
         const tr = editorViewRef.current.state.tr;
-  
+
         let newThoughtPos = null;
         let newThought = null;
 
@@ -923,7 +944,7 @@ function App() {
             newThought = node;
           }
         });
-  
+
         if (newThoughtPos === null) {
           console.log("No 'thought' node found in the document.");
           return;
@@ -932,14 +953,14 @@ function App() {
         // Create a text node with the delta content
         const textNode = editorViewRef.current.state.schema.text(delta);
         let insertPos = newThoughtPos as number + newThought.nodeSize - 1;
-  
+
         // Insert the delta text at the end of the last thought
         tr.insert(insertPos, textNode).scrollIntoView();
-  
+
         // Apply highlight mark if needed
         const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
         tr.addMark(insertPos, insertPos + delta.length, highlightMark);
-  
+
         editorViewRef.current.dispatch(tr);
       }
     }
@@ -1028,8 +1049,16 @@ function App() {
     );
   };
 
-  return (
-    <div className="App flex flex-col max-h-screen">
+  return !session
+    ? (
+      <div className="App flex flex-col max-h-screen">
+        <div className="w-screen flex justify-center">
+          <Auth supabaseClient={supabase} appearance={{theme: ThemeSupa}} providers={[]}/>
+        </div>
+      </div>
+    )
+    : (
+      <div className="App flex flex-col max-h-screen">
       <div className="w-screen flex">
         <svg xmlns="http://www.w3.org/2000/svg" width="61" height="49.5" viewBox="0 0 61 49.5" className="flex-none">
           <rect x="8" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
@@ -1054,6 +1083,7 @@ function App() {
           ))}
         </select>
         <div className="flex-grow flex justify-end">
+          {session && (<SignOutButton supabaseClient={supabase}/>)}
           <div className="flex items-center space-x-2 p-2 rounded-md">
             {envStatus === "attached" ? (
               <>
@@ -1120,9 +1150,9 @@ function App() {
             ) : (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6" 
+                className="h-6 w-6"
                 fill="currentColor"
-                viewBox="2 5 20 14" 
+                viewBox="2 5 20 14"
                 stroke="currentColor"
               >
                 <path
@@ -1140,7 +1170,7 @@ function App() {
               msTillNextThought?.toFixed(0) || ""
             }</span>
           ) : null }
-          {/* 
+          {/*
           <label htmlFor="lockScrollToBottom" className="flex items-center space-x-1">
             <input
               type="checkbox"
