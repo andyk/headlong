@@ -19,6 +19,7 @@ import { ThemeSupa } from '@supabase/auth-ui-shared'
 import { SignOutButton } from './components/auth/Signout';
 import { ConnectionStatusIcon } from './components/ConnectionStatusIcon';
 import { HeadlongIcon } from './components/HeadlongIcon';
+import { PlayPauseIcon } from './components/PlayPauseIcon';
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
@@ -1110,33 +1111,7 @@ function App() {
               return !currVal;
             });
           }}>
-            {generatingLoopOn ? (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path fill="#FFFFFF" d="M6 4h4v16H6z" />
-                <path fill="#FFFFFF" d="M14 4h4v16h-4z" />
-              </svg> // Pause icon
-            ) : (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="currentColor"
-                viewBox="2 5 20 14"
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M8 5v14l11-7z"
-                />
-              </svg>
-            )}
+            <PlayPauseIcon isPlaying={generatingLoopOn}/>
           </button>
           {generatingLoopOn && generationTrigger !== null ? (
             <span className="text-xs">{
