@@ -1,4 +1,4 @@
-export * from './auth/Signout'
+export * from './auth/SignOutButton'
 export * from './ConnectionStatusIcon'
 export * from './HeadlongIcon'
 export * from './PlayPauseIcon'

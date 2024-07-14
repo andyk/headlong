@@ -1080,12 +1080,12 @@ function App() {
             </option>
           ))}
         </select>
-        <div className="flex-grow flex justify-end">
-          {session && (<SignOutButton supabaseClient={supabase}/>)}
+        <div className="flex-grow flex justify-end items-center">
           <div className="flex items-center space-x-2 p-2 rounded-md">
             <span className={`text-sm text-${isEnvAttached ? 'green' : 'red'}-500`}>Environment</span>
             <ConnectionStatusIcon connected={isEnvAttached}/>
           </div>
+          <SignOutButton supabaseClient={supabase}/>
         </div>
       </div>
       <div className="flex-grow overflow-y-auto border border-solid border-[#e3ccfc]">
