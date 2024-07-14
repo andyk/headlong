@@ -18,6 +18,7 @@ import { Auth } from "@supabase/auth-ui-react";
 import { ThemeSupa } from '@supabase/auth-ui-shared'
 import { SignOutButton } from './components/auth/Signout';
 import { ConnectionStatusIcon } from './components/ConnectionStatusIcon';
+import { HeadlongIcon } from './components/HeadlongIcon';
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
@@ -1063,11 +1064,7 @@ function App() {
     : (
       <div className="App flex flex-col max-h-screen">
       <div className="w-screen flex">
-        <svg xmlns="http://www.w3.org/2000/svg" width="61" height="49.5" viewBox="0 0 61 49.5" className="flex-none">
-          <rect x="8" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
-          <rect x="23" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
-          <rect x="36.5" y="33.5" width="11.5" height="9" style={{ fill: "#b87df9" }} />
-        </svg>
+        <HeadlongIcon/>
         <select
           id="agent-selector"
           className="bg-[#121212] border border-gray-600 px-2 m-2"
