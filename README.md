@@ -18,11 +18,11 @@ The webapp communicates with the environment via a Supabase `thoughts` table and
 ## Install and run
 
 ### == ht ==
-Download the latest ht binary from https://github.com/andyk/ht/releases/latest
-and add it to your path.
+Download the latest `ht` binary from https://github.com/andyk/ht/releases/latest
+and add it to your `PATH`.
 
 ### == thought server ==
-1. You need python >= 3.10 since we use the `match` syntax.
+1. You need `python >= 3.10` since we use the `match` syntax.
 2. Create or get a copy of thinkers.yaml and put it into `packages/thought_server/`
 3. Then in a new terminal run:
 ```shell
