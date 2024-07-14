@@ -25,16 +25,17 @@ cd packages/webapp
 npm install
 npm run dev
 
-# in a new terminal 
+# in a new terminal (Requires python 3.10+)
 cd packages/thought_server
-virtualenv env
-./venv/bin/activate
-python thought_server.py
+virtualenv venv
+source ./venv/bin/activate
+pip install -r requirements.txt
+. ./launch.sh
 
 # in a new terminal 
 cd packages/env
 npm install
-npm run thoughtServer
+npm run terminalServer
 
 # in a new terminal 
 cd packages/env
