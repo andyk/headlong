@@ -15,11 +15,8 @@ import { Database } from "./database.types";
 import "prosemirror-view/style/prosemirror.css";
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { Auth } from "@supabase/auth-ui-react";
-import { ThemeSupa } from '@supabase/auth-ui-shared'
-import { SignOutButton } from './components/auth/Signout';
-import { ConnectionStatusIcon } from './components/ConnectionStatusIcon';
-import { HeadlongIcon } from './components/HeadlongIcon';
-import { PlayPauseIcon } from './components/PlayPauseIcon';
+import { ThemeSupa } from '@supabase/auth-ui-shared';
+import { ConnectionStatusIcon, HeadlongIcon, PlayPauseIcon, SignOutButton } from './components';
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
