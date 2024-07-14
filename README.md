@@ -23,7 +23,7 @@ and add it to your `PATH`.
 
 ### == thought server ==
 1. You need `python >= 3.10` since we use the `match` syntax.
-2. Create or get a copy of thinkers.yaml and put it into `packages/thought_server/`
+2. Create or get a copy of `thinkers.yaml` and put it into `packages/thought_server/`
 3. Then in a new terminal run:
 ```shell
 cd packages/thought_server
@@ -34,7 +34,7 @@ pip install -r requirements.txt
 ```
 
 ### == headlong UI webapp ==
-By default your webapp will connect to the main env running in EC2
+By default, your webapp will connect to the main env running in EC2
 via supabase realtime. If you want to override that and use a local
 env, then you'll need to run the terminalServer and env locally.
 We strongly recommend you run these in a docker instance.
