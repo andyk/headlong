@@ -14,9 +14,9 @@ import { throttle } from "lodash";
 import { Database } from "./database.types";
 import "prosemirror-view/style/prosemirror.css";
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
-import { Auth } from "@supabase/auth-ui-react";
-import { ThemeSupa } from '@supabase/auth-ui-shared';
 import { ConnectionStatusIcon, HeadlongIcon, PlayPauseIcon, SignOutButton } from './components';
+import { pathLogin, pathResetPassword } from './routes';
+import { useNavigate } from 'react-router-dom';
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
@@ -449,6 +449,7 @@ function App() {
     setThoughtIdsToUpdate(new Set());
   }
 
+  const navigate = useNavigate()
   /**
    * Auth
    */
@@ -459,8 +460,15 @@ function App() {
     })
 
     // Listen for auth state changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
+    const { data: { subscription} } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log("event=", event)
+      if (event === 'PASSWORD_RECOVERY') {
+        navigate(pathResetPassword)
+      } if (event === 'SIGNED_OUT') {
+        navigate(pathLogin)
+      } else {
+        setSession(session)
+      }
     })
 
     // Remove auth listener on exit
@@ -1051,15 +1059,7 @@ function App() {
 
   const isEnvAttached = (envStatus === "attached");
 
-  return !session
-    ? (
-      <div className="App flex flex-col max-h-screen">
-        <div className="w-screen flex justify-center">
-          <Auth supabaseClient={supabase} appearance={{theme: ThemeSupa}} providers={[]}/>
-        </div>
-      </div>
-    )
-    : (
+  return (
       <div className="App flex flex-col max-h-screen">
       <div className="w-screen flex">
         <HeadlongIcon/>
