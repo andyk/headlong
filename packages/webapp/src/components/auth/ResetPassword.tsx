@@ -41,6 +41,7 @@ export function ResetPassword({supabaseClient}: ResetPasswordProps) {
 
       if (error) {
         setErrorMessage(error.toString)
+        setStatus('typing')
       } else {
         setStatus('success')
         navigate(pathRoot)
