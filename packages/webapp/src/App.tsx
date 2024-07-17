@@ -14,6 +14,9 @@ import { throttle } from "lodash";
 import { Database } from "./database.types";
 import "prosemirror-view/style/prosemirror.css";
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+import { ConnectionStatusIcon, HeadlongIcon, PlayPauseIcon, SignOutButton } from './components';
+import { pathLogin, pathResetPassword } from './routes';
+import { useNavigate } from 'react-router-dom';
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
@@ -105,6 +108,7 @@ function App() {
   const [generatingLoopOn, setGeneratingLoopOn] = useState(false); // Use this to control the generation loop
   const [generationTrigger, setGenerationTrigger] = useState<number | null>(null);
   const [msTillNextThought, setMsTillNextThought] = useState<number | null>(null);
+  const [session, setSession] = useState(null)
 
   function computeNewThoughtIndex(state: EditorState, appendToEnd?: boolean) {
     let newThought = null;
@@ -255,7 +259,7 @@ function App() {
           thoughtIdsInSelection.add(node.attrs.id);
         }
       });
-  
+
       // Check if it's just a cursor position without a selection range.
       const isCursor = from === to;
       if (isCursor) {
@@ -269,13 +273,13 @@ function App() {
       } else {
         // Here you can handle the deletion of thoughts by their IDs.
         // For example, mark them for deletion in the database, update state, etc.
- 
+
         if (dispatch) {
           // Create and dispatch a transaction that deletes the selected range.
           const deleteTransaction = state.tr.delete(from, to);
           dispatch(deleteTransaction);
         }
-        
+
         // Return true to indicate that the backspace handler has done something,
         // preventing the default backspace behavior.
         retVal = true;
@@ -290,7 +294,7 @@ function App() {
       return true;
     },
   });
-  
+
   //const backspaceKeyPlugin = keymap({
   //  Backspace: (state, dispatch) => {
   //    // Use the joinBackward command directly
@@ -445,8 +449,33 @@ function App() {
     setThoughtIdsToUpdate(new Set());
   }
 
-  const throttlePushToDB = useMemo(() => throttle(pushToDB, 1000), []);
+  const navigate = useNavigate()
+  /**
+   * Auth
+   */
+  useEffect(() => {
+    // Get session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+    })
 
+    // Listen for auth state changes
+    const { data: { subscription} } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log("event=", event)
+      if (event === 'PASSWORD_RECOVERY') {
+        navigate(pathResetPassword)
+      } if (event === 'SIGNED_OUT') {
+        navigate(pathLogin)
+      } else {
+        setSession(session)
+      }
+    })
+
+    // Remove auth listener on exit
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const throttlePushToDB = useMemo(() => throttle(pushToDB, 1000), []);
   useEffect(() => {
     if (thoughtIdsToUpdate.size === 0) {
       return;
@@ -794,7 +823,7 @@ function App() {
               return new Set(prev).add(currentThoughtId);
             });
           }
-        } 
+        }
         editorViewRef.current.updateState(newState);
       },
     });
@@ -911,7 +940,7 @@ function App() {
     async function appendToGeneratedThought(delta: string) {
       if (delta && editorViewRef.current) {
         const tr = editorViewRef.current.state.tr;
-  
+
         let newThoughtPos = null;
         let newThought = null;
 
@@ -923,7 +952,7 @@ function App() {
             newThought = node;
           }
         });
-  
+
         if (newThoughtPos === null) {
           console.log("No 'thought' node found in the document.");
           return;
@@ -932,14 +961,14 @@ function App() {
         // Create a text node with the delta content
         const textNode = editorViewRef.current.state.schema.text(delta);
         let insertPos = newThoughtPos as number + newThought.nodeSize - 1;
-  
+
         // Insert the delta text at the end of the last thought
         tr.insert(insertPos, textNode).scrollIntoView();
-  
+
         // Apply highlight mark if needed
         const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
         tr.addMark(insertPos, insertPos + delta.length, highlightMark);
-  
+
         editorViewRef.current.dispatch(tr);
       }
     }
@@ -1028,14 +1057,12 @@ function App() {
     );
   };
 
+  const isEnvAttached = (envStatus === "attached");
+
   return (
-    <div className="App flex flex-col max-h-screen">
+      <div className="App flex flex-col max-h-screen">
       <div className="w-screen flex">
-        <svg xmlns="http://www.w3.org/2000/svg" width="61" height="49.5" viewBox="0 0 61 49.5" className="flex-none">
-          <rect x="8" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
-          <rect x="23" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
-          <rect x="36.5" y="33.5" width="11.5" height="9" style={{ fill: "#b87df9" }} />
-        </svg>
+        <HeadlongIcon/>
         <select
           id="agent-selector"
           className="bg-[#121212] border border-gray-600 px-2 m-2"
@@ -1053,37 +1080,12 @@ function App() {
             </option>
           ))}
         </select>
-        <div className="flex-grow flex justify-end">
+        <div className="flex-grow flex justify-end items-center">
           <div className="flex items-center space-x-2 p-2 rounded-md">
-            {envStatus === "attached" ? (
-              <>
-                <span className="text-sm text-green-500">Environment</span>
-                {/* Online Icon */}
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5 text-green-500"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.293a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-              </>
-            ) : (
-              <>
-                <span className="text-sm text-red-500">Environment</span>
-                {/* Offline Icon: Red circle (outline) with a red "X" */}
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="9" stroke="#ef4444" fill="none" strokeWidth="2" />{" "}
-                  {/* Red outlined circle with black fill */}
-                  <path stroke="#ef4444" strokeLinecap="round" strokeWidth="2" d="M6 6l8 8m0 -8l-8 8" /> {/* Red X */}
-                </svg>
-              </>
-            )}
+            <span className={`text-sm text-${isEnvAttached ? 'green' : 'red'}-500`}>Environment</span>
+            <ConnectionStatusIcon connected={isEnvAttached}/>
           </div>
+          <SignOutButton supabaseClient={supabase}/>
         </div>
       </div>
       <div className="flex-grow overflow-y-auto border border-solid border-[#e3ccfc]">
@@ -1106,33 +1108,7 @@ function App() {
               return !currVal;
             });
           }}>
-            {generatingLoopOn ? (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path fill="#FFFFFF" d="M6 4h4v16H6z" />
-                <path fill="#FFFFFF" d="M14 4h4v16h-4z" />
-              </svg> // Pause icon
-            ) : (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6" 
-                fill="currentColor"
-                viewBox="2 5 20 14" 
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M8 5v14l11-7z"
-                />
-              </svg>
-            )}
+            <PlayPauseIcon isPlaying={generatingLoopOn}/>
           </button>
           {generatingLoopOn && generationTrigger !== null ? (
             <span className="text-xs">{
@@ -1140,7 +1116,7 @@ function App() {
               msTillNextThought?.toFixed(0) || ""
             }</span>
           ) : null }
-          {/* 
+          {/*
           <label htmlFor="lockScrollToBottom" className="flex items-center space-x-1">
             <input
               type="checkbox"
