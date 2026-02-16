@@ -1,0 +1,60 @@
+/*
+https://www.npmjs.com/package/ts-node#commonjs-vs-native-ecmascript-modules
+Quote:
+
+CommonJS vs native ECMAScript modules
+=======================================
+TypeScript is almost always written using modern import syntax, but it is also
+transformed before being executed by the underlying runtime. You can choose to
+either transform to CommonJS or to preserve the native import syntax, using
+node's native ESM support. Configuration is different for each.
+
+...
+
+Transforming to CommonJS is typically simpler and more widely supported because
+it is older. You must remove "type": "module" from package.json and set
+"module": "CommonJS" in tsconfig.json.
+
+=== CommonJS ===
+If you must keep "module": "ESNext" for tsc, webpack, or another build tool, you
+can set an override for ts-node:
+
+{
+  "compilerOptions": {
+    "module": "ESNext"
+  },
+  "ts-node": {
+    "compilerOptions": {
+      "module": "CommonJS"
+    }
+  }
+}
+
+=== Native ECMAScript modules ===
+Node's ESM loader hooks are experimental and subject to change. ts-node's ESM
+support is as stable as possible, but it relies on APIs which node can and will
+break in new versions of node. Thus it is not recommended for production.
+
+For complete usage, limitations, and to provide feedback, see #1007.
+
+You must set "type": "module" in package.json and "module": "ESNext" in
+tsconfig.json.
+
+*/
+{
+    "compilerOptions": {
+      "strict": false,
+      "target": "es2022", // "es2018",                                  /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
+      "module": "CommonJS", // "es2022",                                /* Specify what module code is generated. */
+      "moduleResolution": "nodenext",
+      "outDir": "./lib", 
+      "rootDir": "./src", 
+      "sourceMap": true,                                /* Create source map files for emitted JavaScript files. */
+      "esModuleInterop": true,                             /* Emit additional JavaScript to ease support for importing CommonJS modules. This enables 'allowSyntheticDefaultImports' for type compatibility. */
+      "skipLibCheck": true,                                 /* Skip type checking all .d.ts files. */
+      "isolatedModules": true,
+      "jsx": "react",
+    },
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules"]
+  }

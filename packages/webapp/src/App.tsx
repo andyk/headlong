@@ -93,14 +93,24 @@ function breakTextAndPushToContent(text: string, content: ProseMirrorNode[], sch
 function App() {
   const editorRef = useRef<HTMLElement>();
   const editorViewRef = useRef<EditorView | null>(null);
-  const [selectedAgentName, setSelectedAgentName] = useState<string>("bilbo bossy baggins");
+  const [selectedAgentName, setSelectedAgentName] = useState<string>(
+    () => localStorage.getItem("headlong_selected_agent") || "bilbo bossy baggins"
+  );
   const [agentNames, setAgentNames] = useState<string[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(true);
   const [thoughts, setThoughts] = useState<Thought[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modelSelection, setModelSelection] = useState(models[0]);
+  const [modelSelection, setModelSelection] = useState(
+    () => localStorage.getItem("headlong_selected_model") || models[0]
+  );
   const [modelTemperature, setModelTemperature] = useState(0.5);
   const [envStatus, setEnvStatus] = useState("detached");
+  const [envPaneOpen, setEnvPaneOpen] = useState(false);
+  const [envTools, setEnvTools] = useState<{name: string; description: string}[]>([]);
+  const [envActivity, setEnvActivity] = useState<{ts: string; message: string}[]>([]);
+  const [envAgentName, setEnvAgentName] = useState("");
+  const [envUptime, setEnvUptime] = useState(0);
+  const activityEndRef = useRef<HTMLDivElement>(null);
   const [thoughtIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
   const [generatingLoopOn, setGeneratingLoopOn] = useState(false); // Use this to control the generation loop
   const [generationTrigger, setGenerationTrigger] = useState<number | null>(null);
@@ -483,6 +493,37 @@ function App() {
         }
       });
   }, []);
+
+  // Poll env status + activity when pane is open
+  useEffect(() => {
+    if (!envPaneOpen) return;
+    const fetchEnv = async () => {
+      try {
+        const [statusRes, activityRes] = await Promise.all([
+          fetch("http://localhost:8000/env/status"),
+          fetch("http://localhost:8000/env/activity"),
+        ]);
+        if (statusRes.ok) {
+          const data = await statusRes.json();
+          setEnvTools(data.tools);
+          setEnvAgentName(data.agent_name);
+          setEnvUptime(data.uptime_seconds);
+        }
+        if (activityRes.ok) {
+          const data = await activityRes.json();
+          setEnvActivity(data);
+        }
+      } catch (_) { /* env not reachable */ }
+    };
+    fetchEnv();
+    const interval = setInterval(fetchEnv, 2000);
+    return () => clearInterval(interval);
+  }, [envPaneOpen]);
+
+  // Auto-scroll activity log
+  useEffect(() => {
+    activityEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [envActivity]);
 
   useEffect(() => {
     // Assuming newThought is the thought object you received from Supabase
@@ -1029,7 +1070,7 @@ function App() {
   };
 
   return (
-    <div className="App flex flex-col max-h-screen">
+    <div className="App flex flex-col h-screen max-h-screen">
       <div className="w-screen flex">
         <svg xmlns="http://www.w3.org/2000/svg" width="61" height="49.5" viewBox="0 0 61 49.5" className="flex-none">
           <rect x="8" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
@@ -1044,6 +1085,7 @@ function App() {
             const newAgentNameSelected = event.target.value;
             if (newAgentNameSelected) {
               setSelectedAgentName(newAgentNameSelected);
+              localStorage.setItem("headlong_selected_agent", newAgentNameSelected);
             }
           }}
         >
@@ -1054,11 +1096,13 @@ function App() {
           ))}
         </select>
         <div className="flex-grow flex justify-end">
-          <div className="flex items-center space-x-2 p-2 rounded-md">
+          <button
+            className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-800"
+            onClick={() => setEnvPaneOpen(prev => !prev)}
+          >
             {envStatus === "attached" ? (
               <>
                 <span className="text-sm text-green-500">Environment</span>
-                {/* Online Icon */}
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   className="h-5 w-5 text-green-500"
@@ -1075,19 +1119,68 @@ function App() {
             ) : (
               <>
                 <span className="text-sm text-red-500">Environment</span>
-                {/* Offline Icon: Red circle (outline) with a red "X" */}
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20">
-                  <circle cx="10" cy="10" r="9" stroke="#ef4444" fill="none" strokeWidth="2" />{" "}
-                  {/* Red outlined circle with black fill */}
-                  <path stroke="#ef4444" strokeLinecap="round" strokeWidth="2" d="M6 6l8 8m0 -8l-8 8" /> {/* Red X */}
+                  <circle cx="10" cy="10" r="9" stroke="#ef4444" fill="none" strokeWidth="2" />
+                  <path stroke="#ef4444" strokeLinecap="round" strokeWidth="2" d="M6 6l8 8m0 -8l-8 8" />
                 </svg>
               </>
             )}
-          </div>
+          </button>
         </div>
       </div>
-      <div className="flex-grow overflow-y-auto border border-solid border-[#e3ccfc]">
-        <div ref={editorRef} className="w-full h-full p-1"></div> {/* Ensure the ref div fills its parent */}
+      <div className="flex-grow min-h-0 flex border border-solid border-[#e3ccfc]">
+        <div className={envPaneOpen ? "flex-1 min-w-0 overflow-y-auto" : "w-full overflow-y-auto"}>
+          <div ref={editorRef} className="w-full h-full p-1"></div>
+        </div>
+        {envPaneOpen && (
+          <div className="w-1/2 border-l border-gray-600 flex flex-col overflow-hidden bg-[#121212]">
+            {/* Pane header */}
+            <div className="flex items-center justify-between p-3 border-b border-gray-600">
+              <span className="text-sm font-bold">Environment</span>
+              <button className="text-gray-400 hover:text-white" onClick={() => setEnvPaneOpen(false)}>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+            {/* Status */}
+            <div className="p-3 border-b border-gray-700">
+              <div className="flex items-center space-x-2">
+                <span className={`inline-block w-2 h-2 rounded-full ${envStatus === "attached" ? "bg-green-500" : "bg-red-500"}`}></span>
+                <span className="text-sm">{envStatus === "attached" ? "Connected" : "Disconnected"}</span>
+              </div>
+              {envAgentName && <div className="text-xs text-gray-400 mt-1">Agent: {envAgentName}</div>}
+              {envUptime > 0 && <div className="text-xs text-gray-400">Uptime: {Math.floor(envUptime / 60)}m {envUptime % 60}s</div>}
+            </div>
+            {/* Tools */}
+            <div className="p-3 border-b border-gray-700">
+              <div className="text-sm font-bold mb-2">Tools ({envTools.length})</div>
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {envTools.map((tool) => (
+                  <div key={tool.name} className="text-xs">
+                    <span className="text-[#b87df9]">{tool.name}</span>
+                    <span className="text-gray-500 ml-1">- {tool.description}</span>
+                  </div>
+                ))}
+                {envTools.length === 0 && <div className="text-xs text-gray-500">No tools loaded</div>}
+              </div>
+            </div>
+            {/* Activity */}
+            <div className="flex-1 flex flex-col overflow-hidden p-3">
+              <div className="text-sm font-bold mb-2">Activity</div>
+              <div className="flex-1 overflow-y-auto text-xs space-y-1">
+                {envActivity.map((entry, i) => (
+                  <div key={i} className="flex">
+                    <span className="text-gray-500 flex-none w-20">{new Date(entry.ts).toLocaleTimeString()}</span>
+                    <span className="text-gray-300 ml-2">{entry.message}</span>
+                  </div>
+                ))}
+                {envActivity.length === 0 && <div className="text-gray-500">No activity yet</div>}
+                <div ref={activityEndRef} />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       <div className="flex justify-between items-center p-2 border-t border-slate-200">
         <div className="flex items-center space-x-2">
@@ -1140,7 +1233,8 @@ function App() {
               msTillNextThought?.toFixed(0) || ""
             }</span>
           ) : null }
-          {/* 
+          <span className="text-xs text-gray-400 ml-3">Ctrl+Enter to trigger action</span>
+          {/*
           <label htmlFor="lockScrollToBottom" className="flex items-center space-x-1">
             <input
               type="checkbox"
@@ -1162,7 +1256,7 @@ function App() {
           <select
             id="modelSelection"
             value={modelSelection}
-            onChange={(e) => setModelSelection(e.target.value)}
+            onChange={(e) => { setModelSelection(e.target.value); localStorage.setItem("headlong_selected_model", e.target.value); }}
             className="ml-1"
           >
             {models.map(
