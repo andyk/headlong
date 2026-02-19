@@ -35,3 +35,6 @@ packages/packages/
 *.env
 
 thinkers.yaml
+
+.headlong.pids
+.headlong-logs/
