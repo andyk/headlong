@@ -1,0 +1,212 @@
+#!/bin/bash
+set -e
+
+REPO_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+PIDFILE="$REPO_ROOT/.headlong.pids"
+LOGDIR="$REPO_ROOT/.headlong-logs"
+
+# --- Usage ---
+usage() {
+  echo "Usage: ./headlong <command> [options]"
+  echo ""
+  echo "Commands:"
+  echo "  run <agent_name> [--no-docker]   Start all services in the background"
+  echo "  stop                             Stop all running services"
+  echo "  logs                             Tail logs from all services"
+  echo ""
+  echo "Options:"
+  echo "  --no-docker     Force native mode even if Docker is running"
+  echo "  --help, -h      Show this help message"
+}
+
+# --- Collect all PIDs in a process tree ---
+collect_pids() {
+  local pid=$1
+  echo "$pid"
+  local children
+  children=$(pgrep -P "$pid" 2>/dev/null || true)
+  for child in $children; do
+    collect_pids "$child"
+  done
+}
+
+# --- Stop command ---
+do_stop() {
+  echo "Stopping Headlong..."
+
+  if [ -f "$PIDFILE" ]; then
+    # Collect all PIDs (parents + children) first
+    ALL_PIDS=()
+    while read -r pid; do
+      while IFS= read -r p; do
+        ALL_PIDS+=("$p")
+      done < <(collect_pids "$pid")
+    done < "$PIDFILE"
+    rm -f "$PIDFILE"
+
+    # Send SIGTERM to all
+    for pid in "${ALL_PIDS[@]}"; do
+      kill "$pid" 2>/dev/null || true
+    done
+
+    # Brief grace period, then SIGKILL any survivors
+    sleep 1
+    for pid in "${ALL_PIDS[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+      fi
+    done
+  else
+    echo "No pidfile found. Nothing to stop."
+  fi
+
+  # Remove Docker container if running
+  docker rm -f headlong-env 2>/dev/null || true
+
+  echo "All processes stopped."
+}
+
+# --- Logs command ---
+do_logs() {
+  if [ ! -d "$LOGDIR" ]; then
+    echo "No logs found. Is Headlong running?"
+    exit 1
+  fi
+  tail -f "$LOGDIR"/*.log
+}
+
+# --- Run command ---
+do_run() {
+  # Parse run arguments
+  AGENT_NAME=""
+  NO_DOCKER=false
+
+  for arg in "$@"; do
+    if [ "$arg" = "--no-docker" ]; then
+      NO_DOCKER=true
+    elif [ -z "$AGENT_NAME" ]; then
+      AGENT_NAME="$arg"
+    fi
+  done
+
+  if [ -z "$AGENT_NAME" ]; then
+    echo "Usage: ./headlong run <agent_name> [--no-docker]"
+    echo "Example: ./headlong run \"Bobby Wilder\""
+    exit 1
+  fi
+
+  # Auto-detect Docker (unless --no-docker)
+  if $NO_DOCKER; then
+    USE_DOCKER=false
+  elif docker info &>/dev/null; then
+    USE_DOCKER=true
+  else
+    USE_DOCKER=false
+  fi
+
+  # Stop any existing instance first
+  if [ -f "$PIDFILE" ]; then
+    echo "Stopping existing Headlong instance..."
+    do_stop
+  fi
+
+  # Source .env
+  if [ -f "$REPO_ROOT/.env" ]; then
+    set -a
+    source "$REPO_ROOT/.env"
+    set +a
+  fi
+
+  # Set up log directory
+  rm -rf "$LOGDIR"
+  mkdir -p "$LOGDIR"
+
+  PIDS=()
+
+  # Start env daemon
+  if $USE_DOCKER; then
+    echo "Starting env daemon in Docker..."
+
+    docker build -t headlong-env "$REPO_ROOT/packages/env"
+    docker rm -f headlong-env 2>/dev/null || true
+
+    docker run -d \
+      --name headlong-env \
+      -e ANTHROPIC_API_KEY \
+      -e SUPABASE_URL_HEADLONG \
+      -e SUPABASE_SERVICE_ROLE_KEY_HEADLONG \
+      -e TELEGRAM_BOT_TOKEN \
+      -e TELEGRAM_CHAT_ID \
+      -e SERPAPI_API_KEY \
+      -e OPENAI_API_KEY \
+      -e OPENROUTER_API_KEY \
+      -p 8000:8000 \
+      -v "$REPO_ROOT":/app/headlong \
+      -w /app/headlong/packages/env \
+      headlong-env \
+      "$AGENT_NAME"
+
+    docker logs -f headlong-env >> "$LOGDIR/env.log" 2>&1 &
+    PIDS+=($!)
+  else
+    echo "Starting env daemon (native)..."
+    (
+      cd "$REPO_ROOT/packages/env"
+      source venv/bin/activate
+      python main.py "$AGENT_NAME"
+    ) >> "$LOGDIR/env.log" 2>&1 &
+    PIDS+=($!)
+  fi
+
+  # Start agent daemon
+  echo "Starting agent daemon..."
+  (
+    cd "$REPO_ROOT/packages/agent"
+    source venv/bin/activate
+    python main.py "$AGENT_NAME"
+  ) >> "$LOGDIR/agent.log" 2>&1 &
+  PIDS+=($!)
+
+  # Start webapp
+  echo "Starting webapp..."
+  (
+    cd "$REPO_ROOT/packages/webapp"
+    npm run dev
+  ) >> "$LOGDIR/webapp.log" 2>&1 &
+  PIDS+=($!)
+
+  # Write pidfile
+  printf '%s\n' "${PIDS[@]}" > "$PIDFILE"
+
+  echo ""
+  echo "=== Headlong is running ==="
+  echo "  Agent:   $AGENT_NAME"
+  echo "  Env:     http://localhost:8000  $(if $USE_DOCKER; then echo '(Docker)'; else echo '(native)'; fi)"
+  echo "  Agent:   http://localhost:8001"
+  echo "  Webapp:  http://localhost:5173"
+  echo ""
+  echo "Run ./headlong logs to tail output, ./headlong stop to shut down."
+}
+
+# --- Main dispatch ---
+COMMAND="${1:-}"
+
+case "$COMMAND" in
+  run)
+    shift
+    do_run "$@"
+    ;;
+  stop)
+    do_stop
+    ;;
+  logs)
+    do_logs
+    ;;
+  --help|-h)
+    usage
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
