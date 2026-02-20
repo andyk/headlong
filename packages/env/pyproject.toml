@@ -21,6 +21,3 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
 ]
-
-[project.optional-dependencies]
-rlm = ["rlm"]

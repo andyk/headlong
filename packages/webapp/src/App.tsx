@@ -9,7 +9,7 @@ import { Plugin, TextSelection } from "prosemirror-state";
 import { undo, redo, history } from "prosemirror-history";
 import supabase from "./supabase";
 import { v4 as uuidv4 } from "uuid";
-import { getModels, streamThought } from "./thought_streamer";
+import { getModels, generateThought as apiGenerateThought, startLoop, stopLoop, getLoopStatus, getAgentStatus, getAgentActivity } from "./thought_streamer";
 import { throttle } from "lodash";
 import { Database } from "./database.types";
 import "prosemirror-view/style/prosemirror.css";
@@ -17,54 +17,47 @@ import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
-const INTER_THOUGHT_WAIT_TIME = 5000;
-const POST_ACTION_WAIT_TIME = 10000;
 
 const models: string[] = await getModels();
 
 type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
 
-const removeHighlightOnInputPlugin = new Plugin({
+const humanHighlightOnInputPlugin = new Plugin({
   appendTransaction(transactions, oldState, newState) {
     let newTransaction: Transaction | null = null;
     let markAdded = false;
     transactions.forEach((tr) => {
       if (tr.docChanged) {
-        // Loop through each step in the transaction
         tr.steps.forEach((step) => {
           if (step.toJSON().stepType === "addMark") {
             markAdded = true;
           }
           const stepMap = step.getMap();
-          // We only care about "addText" steps, which don't exist explicitly.
-          // ProseMirror uses "replace" steps with content for adding text.
           if (stepMap) {
-            // Check each step to see if it's adding text within a highlight
-            let removeHighlight = false;
+            // When the user types into agent-highlighted text, swap to human highlight
+            let swapToHuman = false;
             stepMap.forEach((oldStart, oldEnd, newStart, newEnd) => {
-              // Check for highlight in the affected range
-              const hasHighlight = newState.doc.rangeHasMark(newStart, newEnd, newState.schema.marks.highlight);
-              if (hasHighlight) {
-                removeHighlight = true;
+              const hasAgentHighlight = newState.doc.rangeHasMark(newStart, newEnd, newState.schema.marks.highlight);
+              if (hasAgentHighlight) {
+                swapToHuman = true;
               }
             });
 
-            if (removeHighlight) {
-              // If text was added in a highlight, create a transaction to remove the highlight mark
+            if (swapToHuman) {
               const { from, to } = tr.selection;
-              const mark = newState.schema.marks.highlight;
+              const start = Math.max(from - 1, 0);
               if (newTransaction === null) {
-                newTransaction = newState.tr.removeMark(from - 1, to, mark);
-              } else {
-                newTransaction.removeMark(from, to, newState.schema.marks.highlight);
+                newTransaction = newState.tr;
               }
+              // Remove agent highlight, add human highlight on the typed text
+              newTransaction.removeMark(start, to, newState.schema.marks.highlight);
+              newTransaction.addMark(start, to, newState.schema.marks.human_highlight.create());
             }
           }
         });
       }
     });
 
-    // Only append transactions if we've actually created any
     if (newTransaction !== null && !markAdded) {
       return newTransaction;
     }
@@ -111,10 +104,23 @@ function App() {
   const [envAgentName, setEnvAgentName] = useState("");
   const [envUptime, setEnvUptime] = useState(0);
   const activityEndRef = useRef<HTMLDivElement>(null);
+  const agentActivityEndRef = useRef<HTMLDivElement>(null);
   const [thoughtIdsToUpdate, setThoughtIdsToUpdate] = useState<Set<string>>(new Set());
-  const [generatingLoopOn, setGeneratingLoopOn] = useState(false); // Use this to control the generation loop
-  const [generationTrigger, setGenerationTrigger] = useState<number | null>(null);
-  const [msTillNextThought, setMsTillNextThought] = useState<number | null>(null);
+  const [generatingLoopOn, setGeneratingLoopOn] = useState(false);
+  const [agentStatus, setAgentStatus] = useState("detached");
+  const [agentPaneOpen, setAgentPaneOpen] = useState(false);
+  const [agentActivity, setAgentActivity] = useState<{ts: string; message: string}[]>([]);
+  const [agentInfo, setAgentInfo] = useState<{agent_name: string; system_prompt: string; model: string; uptime_seconds: number} | null>(null);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [agentSystemPrompt, setAgentSystemPrompt] = useState("");
+  const [envSystemPrompt, setEnvSystemPrompt] = useState("");
+  const [agentPromptHistory, setAgentPromptHistory] = useState<{id: string; system_prompt: string; created_at: string}[]>([]);
+  const [envPromptHistory, setEnvPromptHistory] = useState<{id: string; system_prompt: string; created_at: string}[]>([]);
+  const lastAgentPromptSaveRef = useRef<number>(0);
+  const lastEnvPromptSaveRef = useRef<number>(0);
+  const generateThoughtRef = useRef<() => void>(() => {});
+  const [agentCollapsed, setAgentCollapsed] = useState<Record<string, boolean>>({});
+  const [envCollapsed, setEnvCollapsed] = useState<Record<string, boolean>>({});
 
   function computeNewThoughtIndex(state: EditorState, appendToEnd?: boolean) {
     let newThought = null;
@@ -231,13 +237,9 @@ function App() {
     },
   });
 
-  const ctrlEnterKeyPlugin = keymap({
-    "Ctrl-Enter": (state, dispatch) => {
+  const altEnterKeyPlugin = keymap({
+    "Alt-Enter": (state, dispatch) => {
       if (dispatch) {
-        // Assuming you have a way to identify the current thought node
-        // This is a simplistic approach, adjust according to your actual node structure and IDs
-        const { $head } = state.selection;
-        const currentThoughtIndex: number = $head.parent.attrs.index;
         const currentThoughtPos = state.selection.$head.before();
         const node = state.doc.nodeAt(currentThoughtPos);
 
@@ -250,6 +252,13 @@ function App() {
       }
 
       return false;
+    },
+  });
+
+  const modEnterKeyPlugin = keymap({
+    "Mod-Enter": () => {
+      generateThoughtRef.current();
+      return true;
     },
   });
 
@@ -464,59 +473,82 @@ function App() {
     throttlePushToDB(thoughtIdsToUpdate);
   }, [thoughtIdsToUpdate]);
 
+  // Poll env status via HTTP (more reliable than presence WebSocket)
   useEffect(() => {
-    const envPresenceRoom = supabase.channel("env_presence_room");
-    envPresenceRoom
-      .on("presence", { event: "sync" }, () => {
-        const newState = envPresenceRoom.presenceState();
-      })
-      .on("presence", { event: "join" }, ({ key, newPresences }) => {
-        console.log("join", key, newPresences);
-        if (key === "env") {
-          if (envStatus === "attached") {
-            console.log("env already attached, ignoring new env");
-            return;
-          }
-          setEnvStatus("attached");
-        }
-      })
-      .on("presence", { event: "leave" }, ({ key, leftPresences }) => {
-        if (key === "env") {
-          if (envStatus !== "detached") {
-            setEnvStatus("detached");
-          }
-        }
-      })
-      .subscribe(async (status) => {
-        if (status === "SUBSCRIBED") {
-          await envPresenceRoom.track({ online_at: new Date().toISOString() });
-        }
-      });
-  }, []);
-
-  // Poll env status + activity when pane is open
-  useEffect(() => {
-    if (!envPaneOpen) return;
-    const fetchEnv = async () => {
+    const checkEnv = async () => {
       try {
-        const [statusRes, activityRes] = await Promise.all([
-          fetch("http://localhost:8000/env/status"),
-          fetch("http://localhost:8000/env/activity"),
-        ]);
-        if (statusRes.ok) {
-          const data = await statusRes.json();
+        const res = await fetch("http://localhost:8000/env/status");
+        if (res.ok) {
+          setEnvStatus("attached");
+          const data = await res.json();
           setEnvTools(data.tools);
           setEnvAgentName(data.agent_name);
           setEnvUptime(data.uptime_seconds);
+        } else {
+          setEnvStatus("detached");
         }
-        if (activityRes.ok) {
-          const data = await activityRes.json();
+      } catch (_) {
+        setEnvStatus("detached");
+      }
+    };
+    checkEnv();
+    const interval = setInterval(checkEnv, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Poll agent status via HTTP (more reliable than presence WebSocket)
+  useEffect(() => {
+    const checkAgent = async () => {
+      try {
+        const [statusData, loopData] = await Promise.all([
+          getAgentStatus(),
+          getLoopStatus(),
+        ]);
+        setAgentStatus("attached");
+        setAgentInfo(statusData);
+        setGeneratingLoopOn(loopData.running);
+      } catch (_) {
+        setAgentStatus("detached");
+      }
+    };
+    checkAgent();
+    const interval = setInterval(checkAgent, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Poll agent activity when pane is open
+  useEffect(() => {
+    if (!agentPaneOpen) return;
+    const fetchActivity = async () => {
+      try {
+        const data = await getAgentActivity();
+        setAgentActivity(data);
+      } catch (_) { /* agent not reachable */ }
+    };
+    fetchActivity();
+    const interval = setInterval(fetchActivity, 2000);
+    return () => clearInterval(interval);
+  }, [agentPaneOpen]);
+
+  // Auto-scroll agent activity log
+  useEffect(() => {
+    agentActivityEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [agentActivity]);
+
+  // Poll env activity when pane is open
+  useEffect(() => {
+    if (!envPaneOpen) return;
+    const fetchActivity = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/env/activity");
+        if (res.ok) {
+          const data = await res.json();
           setEnvActivity(data);
         }
       } catch (_) { /* env not reachable */ }
     };
-    fetchEnv();
-    const interval = setInterval(fetchEnv, 2000);
+    fetchActivity();
+    const interval = setInterval(fetchActivity, 2000);
     return () => clearInterval(interval);
   }, [envPaneOpen]);
 
@@ -524,6 +556,91 @@ function App() {
   useEffect(() => {
     activityEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [envActivity]);
+
+  // Load agent system prompt from Supabase
+  useEffect(() => {
+    const loadAgentPrompt = async () => {
+      const { data } = await supabase.from("agents").select("system_prompt").eq("name", selectedAgentName).single();
+      if (data?.system_prompt != null) setAgentSystemPrompt(data.system_prompt);
+    };
+    const loadHistory = async () => {
+      const { data } = await supabase
+        .from("system_prompt_history")
+        .select("id, system_prompt, created_at")
+        .eq("source_table", "agents")
+        .eq("source_name", selectedAgentName)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (data) setAgentPromptHistory(data);
+    };
+    loadAgentPrompt();
+    loadHistory();
+  }, [selectedAgentName]);
+
+  // Load env system prompt from Supabase
+  useEffect(() => {
+    const loadEnvPrompt = async () => {
+      const { data } = await supabase.from("environments").select("system_prompt").eq("name", selectedAgentName).single();
+      if (data?.system_prompt != null) setEnvSystemPrompt(data.system_prompt);
+    };
+    const loadHistory = async () => {
+      const { data } = await supabase
+        .from("system_prompt_history")
+        .select("id, system_prompt, created_at")
+        .eq("source_table", "environments")
+        .eq("source_name", selectedAgentName)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (data) setEnvPromptHistory(data);
+    };
+    loadEnvPrompt();
+    loadHistory();
+  }, [selectedAgentName]);
+
+  // Save agent system prompt (debounced) and checkpoint history (max 1/min)
+  const saveAgentPrompt = useMemo(() => throttle(async (prompt: string) => {
+    await supabase.from("agents").update({ system_prompt: prompt }).eq("name", selectedAgentName);
+    const now = Date.now();
+    if (now - lastAgentPromptSaveRef.current >= 60000) {
+      lastAgentPromptSaveRef.current = now;
+      await supabase.from("system_prompt_history").insert({
+        source_table: "agents",
+        source_name: selectedAgentName,
+        system_prompt: prompt,
+      });
+      // Refresh history
+      const { data } = await supabase
+        .from("system_prompt_history")
+        .select("id, system_prompt, created_at")
+        .eq("source_table", "agents")
+        .eq("source_name", selectedAgentName)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (data) setAgentPromptHistory(data);
+    }
+  }, 1000), [selectedAgentName]);
+
+  // Save env system prompt (debounced) and checkpoint history (max 1/min)
+  const saveEnvPrompt = useMemo(() => throttle(async (prompt: string) => {
+    await supabase.from("environments").update({ system_prompt: prompt }).eq("name", selectedAgentName);
+    const now = Date.now();
+    if (now - lastEnvPromptSaveRef.current >= 60000) {
+      lastEnvPromptSaveRef.current = now;
+      await supabase.from("system_prompt_history").insert({
+        source_table: "environments",
+        source_name: selectedAgentName,
+        system_prompt: prompt,
+      });
+      const { data } = await supabase
+        .from("system_prompt_history")
+        .select("id, system_prompt, created_at")
+        .eq("source_table", "environments")
+        .eq("source_name", selectedAgentName)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (data) setEnvPromptHistory(data);
+    }
+  }, 1000), [selectedAgentName]);
 
   useEffect(() => {
     // Assuming newThought is the thought object you received from Supabase
@@ -562,20 +679,34 @@ function App() {
       let { tr } = state;
 
       if (eventType === "INSERT") {
+        // Skip if this thought is already in the editor (e.g. we just generated it)
+        let alreadyExists = false;
+        state.doc.descendants((node) => {
+          if (node.type.name === "thought" && node.attrs.id === newThought.id) {
+            alreadyExists = true;
+            return false;
+          }
+        });
+        if (alreadyExists) return;
+
         // Insert the new thought into the editor
         // Determine where to insert the new thought based on its index
         const insertPos = findInsertPosition(state.doc, newThought.index);
         // parse the newThought.body into text nodes separated by soft_break nodes
         // wherever there were \n characters in the body
+        // Choose mark based on content: observations get amber, agent thoughts get purple
+        const isObservation = newThought.body.trim().toLowerCase().startsWith("observation:");
+        const highlightMark = isObservation
+          ? state.schema.marks.observation_highlight.create()
+          : state.schema.marks.highlight.create();
         const thoughtNode = state.schema.nodes.thought.createAndFill(
           {
             id: newThought.id,
             index: newThought.index,
-            // any other attributes
           },
           newThought.body.split("\n").reduce((acc, text, index, array) => {
             if (text !== "") {
-              acc.push(state.schema.text(text));
+              acc.push(state.schema.text(text).mark([highlightMark]));
             }
             if (index < array.length - 1) {
               acc.push(state.schema.nodes.soft_break.create());
@@ -670,7 +801,7 @@ function App() {
 
     // Cleanup subscription on component unmount
     return () => {
-      console.debug(`selectedAgentName changed: unsubscribing from updates about agent ${selectedAgentName}`);
+      console.debug(`selectedAgentName changed: unsubscribing from updates about agent $Agent: {selectedAgentName}`);
       supabase.removeChannel(subscription);
     };
   }, [selectedAgentName]); // Empty dependency array ensures this effect runs only once on mount
@@ -737,8 +868,16 @@ function App() {
       },
       marks: {
         highlight: {
-          toDOM: () => ["span", { style: "background-color: purple;" }, 0],
-          parseDOM: [{ tag: "span", style: "background-color: purple;" }],
+          toDOM: () => ["span", { style: "background-color: rgba(128, 0, 255, 0.25);" }, 0],
+          parseDOM: [{ tag: "span", style: "background-color: rgba(128, 0, 255, 0.25);" }],
+        },
+        human_highlight: {
+          toDOM: () => ["span", { style: "background-color: rgba(0, 180, 216, 0.2);" }, 0],
+          parseDOM: [{ tag: "span", style: "background-color: rgba(0, 180, 216, 0.2);" }],
+        },
+        observation_highlight: {
+          toDOM: () => ["span", { style: "background-color: rgba(255, 170, 0, 0.2);" }, 0],
+          parseDOM: [{ tag: "span", style: "background-color: rgba(255, 170, 0, 0.2);" }],
         },
       },
     });
@@ -797,14 +936,29 @@ function App() {
     });
     const initialContent = schema.nodes.doc.create({}, initialDocContent);
 
+    // Plugin to ensure human_highlight is always the active stored mark for user typing
+    const humanHighlightDefaultPlugin = new Plugin({
+      appendTransaction(_transactions, _oldState, newState) {
+        const humanMark = newState.schema.marks.human_highlight;
+        const storedMarks = newState.storedMarks || newState.selection.$from.marks();
+        const hasHumanMark = storedMarks.some((m: Mark) => m.type === humanMark);
+        if (!hasHumanMark) {
+          return newState.tr.setStoredMarks([humanMark.create()]);
+        }
+        return null;
+      },
+    });
+
     let state = EditorState.create({
       doc: initialContent,
       schema,
       plugins: [
-        removeHighlightOnInputPlugin,
+        humanHighlightOnInputPlugin,
+        humanHighlightDefaultPlugin,
         shiftEnterKeyPlugin,
         enterKeyPlugin,
-        ctrlEnterKeyPlugin,
+        altEnterKeyPlugin,
+        modEnterKeyPlugin,
         backspaceKeyPlugin,
         modAKeyplugin,
         history(),
@@ -854,220 +1008,46 @@ function App() {
     };
   }, [loading]);
 
-  function extractThoughtTexts(doc: ProseMirrorNode) {
-    const texts: [string, string][] = []; // id, thought_body
+  const generateThought = async () => {
+    if (!editorViewRef.current || isGenerating) return;
+    setIsGenerating(true);
 
-    // This function recursively walks through the nodes of the document
-    function findTexts(node: ProseMirrorNode) {
-      // Check if the current node is a 'thought' node
-      if (node.type.name === "thought") {
-        // If it is, extract its text content and add it to the texts array
-        texts.push([node.attrs.id, node.textContent]);
-      }
-      // Recursively walk through the child nodes
-      node.forEach(findTexts);
-    }
-
-    // Start the recursive search from the top-level document node
-    findTexts(doc);
-
-    return texts;
-  }
-
-  useEffect(() => {
-    let interval: NodeJS.Timeout | undefined = undefined;
-
-    if (generatingLoopOn !== null && generationTrigger != null) {
-      interval = setInterval(() => {
-        const newTimeLeft = (INTER_THOUGHT_WAIT_TIME - (Date.now() - generationTrigger)) / 1000;
-
-        if (newTimeLeft <= 0) {
-          setMsTillNextThought(0);
-        } else {
-          setMsTillNextThought(newTimeLeft);
-        }
-      }, 500);
-    } else if (interval !== undefined) {
-      clearInterval(interval);
-    }
-
-    return () => clearInterval(interval); // Cleanup interval on component unmount
-  }, [generatingLoopOn, generationTrigger]);
-
-  useEffect(() => {
-    if (generatingLoopOn) {
-      generateThought(true);
-    }
-  }, [generatingLoopOn, generationTrigger]); // This effect depends on generatingOn, re-run when it changes
-
-  const generateThought = async (appendToEnd?: boolean) => {
-    if (!editorViewRef.current) {
-      return;
-    }
-    let usePostActionWaitTime = false;
-
-    // Generate a new thought ID and index
-    const newThoughtId = uuidv4(); // Assuming uuidv4() is available for generating unique IDs
-    const newThoughtIndex = computeNewThoughtIndex(editorViewRef.current.state, appendToEnd);
-
-    const schema = editorViewRef.current.state.schema;
-    // Create a new thought without setting needs_handling yet
-    const newThoughtNode = schema.nodes.thought.create({
-      id: newThoughtId,
-      index: newThoughtIndex,
-      metadata: {}, // Initially empty or with other necessary initial metadata
-    }); // Assuming your schema has a 'thought' node and 'text' node
-
-    // Add the new thought to the editor state
-    let tr = editorViewRef.current.state.tr;
-    // Adjust the insertion position to after the current node
-    const insertPos = appendToEnd ? (
-      tr.doc.content.size
-    ) : (
-      tr.doc.resolve(tr.selection.from).after(1)
-    );
-    console.log("in generateThought, appendToEnd: ", appendToEnd, " insertPos: ", insertPos);
-    // Insert the new thought node
-    tr = tr.insert(insertPos, newThoughtNode);
-    // reset the cursor to the end of the document
-    tr = tr.setSelection(TextSelection.create(tr.doc, insertPos)).scrollIntoView();
-
-    editorViewRef.current.dispatch(tr);
-
-    // Prepare for LLM text generation
-    const thoughts = extractThoughtTexts(editorViewRef.current.state.doc);
-    // use editorView to get the thought id of the current selection
-    const currThoughtId = newThoughtId; // Use the newly created thought ID
-    // create a new list from `thoughts` that only has thoughts up to and including
-    // the thought with currThoughtId
-    const thoughtsBeforeCurr = thoughts.slice(
-      0,
-      thoughts.findIndex(([id, _]) => id === currThoughtId)
-    );
-    const sysMessage = "You are going to do some thinking on your own. Try to be conscious of your own thoughts so you can tell them to me one by one. Observations are injected into your stream of thoughts from the outside world so you should never come up with a thought that starts with 'observation:'";
-    const userMessage = "What is your next thought?";
-    const assistantMessages: string[] = thoughtsBeforeCurr.map(([_, body]) => {return body;});
-    console.log("Assistant Messages: ", assistantMessages);
-
-    async function appendToGeneratedThought(delta: string) {
-      if (delta && editorViewRef.current) {
-        const tr = editorViewRef.current.state.tr;
-  
-        let newThoughtPos = null;
-        let newThought = null;
-
-        tr.doc.descendants((node, pos) => {
-          // Iterate through the document to find the last 'thought' node with
-          // id newThoughtId, and store its position and node object
-          if (node.type.name === "thought" && node.attrs.id === newThoughtId) {
-            newThoughtPos = pos;
-            newThought = node;
-          }
-        });
-  
-        if (newThoughtPos === null) {
-          console.log("No 'thought' node found in the document.");
-          return;
-        }
-
-        // Create a text node with the delta content
-        const textNode = editorViewRef.current.state.schema.text(delta);
-        let insertPos = newThoughtPos as number + newThought.nodeSize - 1;
-  
-        // Insert the delta text at the end of the last thought
-        tr.insert(insertPos, textNode).scrollIntoView();
-  
-        // Apply highlight mark if needed
-        const highlightMark = editorViewRef.current.state.schema.marks.highlight.create();
-        tr.addMark(insertPos, insertPos + delta.length, highlightMark);
-  
-        editorViewRef.current.dispatch(tr);
-      }
-    }
-
-    const chatArgs = {
-      model: modelSelection,
-      sysMessage: sysMessage,
-      userMessage: userMessage,
-      assistantMessages: assistantMessages,
-      temperature: modelTemperature,
-      stream: true,
-      onDelta: appendToGeneratedThought,
-    };
-    await streamThought(chatArgs);
-
-    // After the new text is fully generated by the LLM
-    const obsRewriteTr = editorViewRef.current.state.tr;
-    let newThoughtPos: null | number = null;
-    let newThought: null | ProseMirrorNode = null;
-
-    obsRewriteTr.doc.descendants((node, pos) => {
-      // Iterate through the document to find the last 'thought' node with
-      // id newThoughtId, and store its position and node object
-      if (node.type.name === "thought" && node.attrs.id === newThoughtId) {
-        newThoughtPos = pos;
-        newThought = node;
-      }
-    });
-
-    // first see if the new thought starts with "observation: "
-    console.log("testing to see if the thought just added was an observation: ", newThought.textContent.toLowerCase());
-    if (newThought && newThought.textContent.toLowerCase().startsWith("observation:")) {
-      console.log("it was an observation, so rewrite it")
-      // if it does, then ask the LLM to rewrite the observation into a reflection on what it expects to observe next
-      const observation = newThought.textContent.substring(12);
-      console.log("observation to rewrite: ", observation);
-      const rewriteObsSysMessage = "Your job is to look at the series of thoughts, and then you will be shown a hypothetical observation with the format of 'observation: ...' which represents what you expect to observe next, and then reformat that observation into a more naturally worded reflection about your expect of what will come next.";
-      const rewriteObsUserMessage = "please rewrite the following so that it does not start with 'observation: ' and intead is a more naturally worded inner thought about your prediction of what you think will happen next...\n" + observation;
-      const rewriteObsChatArgs = {
+    try {
+      // Generate thought via RLM — server saves to DB and returns JSON
+      const result = await apiGenerateThought({
         model: modelSelection,
-        sysMessage: rewriteObsSysMessage,
-        userMessage: rewriteObsUserMessage,
-        assistantMessages: assistantMessages,
         temperature: modelTemperature,
-        stream: true,
-        onDelta: appendToGeneratedThought
-      };
-      // clear the text of the last thought and then rewrite it
-      obsRewriteTr.delete(newThoughtPos, newThoughtPos + newThought.nodeSize);
-      //apply obsRewriteTr to the editorView
-      editorViewRef.current.dispatch(obsRewriteTr);
-      await streamThought(rewriteObsChatArgs);
-    }
-    // then mark the new thought as needs_handling = true
-    let pos = null;
+        agent_name: selectedAgentName,
+      });
 
-    const markupTr = editorViewRef.current.state.tr;
-    markupTr.doc.descendants((node, position) => {
-      if (node.attrs.id === newThoughtId) {
-        pos = position;
-        return false; // Stop searching
-      }
-    });
-    if (pos !== null) {
-      // if node's text contents.toLower starts with "action:"
-      // then set metadata.needs_handling to true
-      const node = markupTr.doc.nodeAt(pos);
-      if (node?.textContent.toLowerCase().startsWith("action:")) {
-        console.log(`new thought ${node} is an action, setting needs_handling to true`)
-        const metadata = node.attrs.metadata;
-        const newMetadata = { ...metadata, needs_handling: true };
-        markupTr.setNodeMarkup(pos, null, { ...node.attrs, metadata: newMetadata });
-        editorViewRef.current.dispatch(markupTr);
-        usePostActionWaitTime = true;
-      }
-    }
-    setThoughtIdsToUpdate((prev) => {
-      return new Set(prev).add(newThoughtId);
-    });
+      // Insert the completed thought into the editor using the server's DB id.
+      // We insert plain text first, then explicitly addMark — this prevents
+      // humanHighlightOnInputPlugin from stripping the highlight.
+      const schema = editorViewRef.current.state.schema;
+      const textNode = schema.text(result.body);
+      const newThoughtNode = schema.nodes.thought.create(
+        { id: result.id, index: result.index, metadata: {} },
+        textNode,
+      );
 
-    const waitTime = usePostActionWaitTime ? POST_ACTION_WAIT_TIME : INTER_THOUGHT_WAIT_TIME
-    console.error("setting timer for next thought in ", waitTime, "ms");
-    setTimeout(
-      () => { setGenerationTrigger((new Date()).getTime() + waitTime) },
-      usePostActionWaitTime ? POST_ACTION_WAIT_TIME : INTER_THOUGHT_WAIT_TIME
-    );
+      let tr = editorViewRef.current.state.tr;
+      const insertPos = tr.doc.content.size;
+      tr = tr.insert(insertPos, newThoughtNode);
+
+      // Add highlight mark to the inserted text range (inside the thought node)
+      const textStart = insertPos + 1; // +1 to skip into the thought node
+      const textEnd = textStart + result.body.length;
+      tr = tr.addMark(textStart, textEnd, schema.marks.highlight.create());
+
+      tr = tr.setSelection(TextSelection.create(tr.doc, insertPos)).scrollIntoView();
+      editorViewRef.current.dispatch(tr);
+    } catch (e) {
+      console.error("Error generating thought:", e);
+    }
+
+    setIsGenerating(false);
   };
+  generateThoughtRef.current = generateThought;
 
   return (
     <div className="App flex flex-col h-screen max-h-screen">
@@ -1077,25 +1057,28 @@ function App() {
           <rect x="23" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
           <rect x="36.5" y="33.5" width="11.5" height="9" style={{ fill: "#b87df9" }} />
         </svg>
-        <select
-          id="agent-selector"
-          className="bg-[#121212] border border-gray-600 px-2 m-2"
-          value={selectedAgentName}
-          onChange={(event) => {
-            const newAgentNameSelected = event.target.value;
-            if (newAgentNameSelected) {
-              setSelectedAgentName(newAgentNameSelected);
-              localStorage.setItem("headlong_selected_agent", newAgentNameSelected);
-            }
-          }}
-        >
-          {agentNames.map((agentName) => (
-            <option key={agentName} value={agentName}>
-              {agentName}
-            </option>
-          ))}
-        </select>
-        <div className="flex-grow flex justify-end">
+        <div className="flex-grow flex justify-end space-x-1">
+          <button
+            className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-800"
+            onClick={() => setAgentPaneOpen(prev => !prev)}
+          >
+            {agentStatus === "attached" ? (
+              <>
+                <span className="text-sm text-green-500">Agent: {selectedAgentName}</span>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-500" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.293a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+              </>
+            ) : (
+              <>
+                <span className="text-sm text-red-500">Agent: {selectedAgentName}</span>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20">
+                  <circle cx="10" cy="10" r="9" stroke="#ef4444" fill="none" strokeWidth="2" />
+                  <path stroke="#ef4444" strokeLinecap="round" strokeWidth="2" d="M6 6l8 8m0 -8l-8 8" />
+                </svg>
+              </>
+            )}
+          </button>
           <button
             className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-800"
             onClick={() => setEnvPaneOpen(prev => !prev)}
@@ -1103,17 +1086,8 @@ function App() {
             {envStatus === "attached" ? (
               <>
                 <span className="text-sm text-green-500">Environment</span>
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5 text-green-500"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.293a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-green-500" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-10.293a1 1 0 00-1.414-1.414L9 9.586 7.707 8.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
               </>
             ) : (
@@ -1129,54 +1103,216 @@ function App() {
         </div>
       </div>
       <div className="flex-grow min-h-0 flex border border-solid border-[#e3ccfc]">
-        <div className={envPaneOpen ? "flex-1 min-w-0 overflow-y-auto" : "w-full overflow-y-auto"}>
+        <div className={(envPaneOpen || agentPaneOpen) ? "flex-1 min-w-0 overflow-y-auto" : "w-full overflow-y-auto"}>
           <div ref={editorRef} className="w-full h-full p-1"></div>
         </div>
+        {agentPaneOpen && (
+          <div className="w-1/2 border-l border-gray-600 flex flex-col overflow-hidden bg-[#121212]">
+            <div className="flex items-center justify-between p-3 border-b border-gray-600">
+              <div className="flex items-center space-x-2">
+                <span className={`inline-block rounded-full ${agentStatus === "attached" ? "bg-green-500" : "bg-red-500"}`} style={{width: "6px", height: "6px"}}></span>
+                <span style={{fontSize: "16px", fontWeight: "bold"}}>Agent</span>
+                {agentInfo?.agent_name && <span className="text-xs text-gray-400">{agentInfo.agent_name}</span>}
+                {agentInfo && <span className="text-xs text-gray-500">uptime: {Math.floor(agentInfo.uptime_seconds / 60)}m {agentInfo.uptime_seconds % 60}s</span>}
+              </div>
+              <div className="flex items-center space-x-2">
+                <button className="text-gray-400 hover:text-white" onClick={() => setAgentPaneOpen(false)}>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {/* Config */}
+              <div className="border-b border-gray-700">
+                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setAgentCollapsed(p => ({...p, config: !p.config}))}>
+                  <span className="text-sm font-bold">Config</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: agentCollapsed.config ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                </button>
+                {!agentCollapsed.config && (
+                  <div className="px-3 pb-3 space-y-2">
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Agent</label>
+                      <select className="bg-[#1a1a1a] border border-gray-600 px-2 py-1 text-sm w-full" value={selectedAgentName} onChange={(e) => { setSelectedAgentName(e.target.value); localStorage.setItem("headlong_selected_agent", e.target.value); }}>
+                        {agentNames.map((name) => (<option key={name} value={name}>{name}</option>))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Model</label>
+                      <select className="bg-[#1a1a1a] border border-gray-600 px-2 py-1 text-sm w-full" value={modelSelection} onChange={(e) => { setModelSelection(e.target.value); localStorage.setItem("headlong_selected_model", e.target.value); }}>
+                        {models.map((key) => (<option key={key} value={key}>{key}</option>))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs text-gray-400 block mb-1">Temperature</label>
+                      <input type="number" step="0.1" max="1.0" min="0.0" value={modelTemperature} onChange={(e) => setModelTemperature(parseFloat(e.target.value))} className="bg-[#1a1a1a] border border-gray-600 px-2 py-1 text-sm w-20" />
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* System Prompt */}
+              <div className="border-b border-gray-700">
+                <div className="flex items-center justify-between">
+                  <button className="flex-1 flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setAgentCollapsed(p => ({...p, prompt: !p.prompt}))}>
+                    <span className="text-sm font-bold">System Prompt</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: agentCollapsed.prompt ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                  </button>
+                </div>
+                {!agentCollapsed.prompt && (
+                  <div className="px-3 pb-3">
+                    <textarea
+                      className="w-full bg-[#1a1a1a] border border-gray-600 text-xs text-gray-300 p-2 rounded resize-y min-h-[120px] max-h-[400px]"
+                      rows={8}
+                      value={agentSystemPrompt}
+                      onChange={(e) => { setAgentSystemPrompt(e.target.value); saveAgentPrompt(e.target.value); }}
+                    />
+                    <div className="flex items-center justify-between mt-1">
+                      {agentPromptHistory.length > 0 && (
+                        <select className="bg-[#1a1a1a] border border-gray-600 px-1 py-0.5 text-xs flex-1" value="" onChange={(e) => { const entry = agentPromptHistory.find(h => h.id === e.target.value); if (entry) { setAgentSystemPrompt(entry.system_prompt); saveAgentPrompt(entry.system_prompt); } }}>
+                          <option value="" disabled>Restore from history...</option>
+                          {agentPromptHistory.map((h) => (<option key={h.id} value={h.id}>{new Date(h.created_at).toLocaleString()} - {h.system_prompt.slice(0, 40)}...</option>))}
+                        </select>
+                      )}
+                      <a
+                        href={`https://supabase.com/dashboard/project/qimpbjvnthrvwsalpgsy/editor?schema=public&table=system_prompt_history&filter=source_table%3Aeq%3Aagents%2Csource_name%3Aeq%3A${encodeURIComponent(selectedAgentName)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center space-x-1 text-xs text-[#b87df9] hover:underline ml-2 flex-none"
+                      >
+                        <span>History</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" style={{width: "10px", height: "10px"}} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* Activity */}
+              <div className="border-b border-gray-700 flex-1 flex flex-col min-h-0">
+                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setAgentCollapsed(p => ({...p, activity: !p.activity}))}>
+                  <span className="text-sm font-bold">Activity</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: agentCollapsed.activity ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                </button>
+                {!agentCollapsed.activity && (
+                  <div className="px-3 pb-3 overflow-y-auto text-xs space-y-1 max-h-[300px]">
+                    {agentActivity.map((entry, i) => (
+                      <div key={i} className="flex">
+                        <span className="text-gray-500 flex-none w-20">{new Date(entry.ts).toLocaleTimeString()}</span>
+                        <span className="text-gray-300 ml-2">{entry.message}</span>
+                      </div>
+                    ))}
+                    {agentActivity.length === 0 && <div className="text-gray-500">No activity yet</div>}
+                    <div ref={agentActivityEndRef} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
         {envPaneOpen && (
           <div className="w-1/2 border-l border-gray-600 flex flex-col overflow-hidden bg-[#121212]">
-            {/* Pane header */}
             <div className="flex items-center justify-between p-3 border-b border-gray-600">
-              <span className="text-sm font-bold">Environment</span>
-              <button className="text-gray-400 hover:text-white" onClick={() => setEnvPaneOpen(false)}>
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </button>
-            </div>
-            {/* Status */}
-            <div className="p-3 border-b border-gray-700">
               <div className="flex items-center space-x-2">
-                <span className={`inline-block w-2 h-2 rounded-full ${envStatus === "attached" ? "bg-green-500" : "bg-red-500"}`}></span>
-                <span className="text-sm">{envStatus === "attached" ? "Connected" : "Disconnected"}</span>
+                <span className={`inline-block rounded-full ${envStatus === "attached" ? "bg-green-500" : "bg-red-500"}`} style={{width: "6px", height: "6px"}}></span>
+                <span style={{fontSize: "16px", fontWeight: "bold"}}>Environment</span>
+                {envUptime > 0 && <span className="text-xs text-gray-500">uptime: {Math.floor(envUptime / 60)}m {envUptime % 60}s</span>}
               </div>
-              {envAgentName && <div className="text-xs text-gray-400 mt-1">Agent: {envAgentName}</div>}
-              {envUptime > 0 && <div className="text-xs text-gray-400">Uptime: {Math.floor(envUptime / 60)}m {envUptime % 60}s</div>}
-            </div>
-            {/* Tools */}
-            <div className="p-3 border-b border-gray-700">
-              <div className="text-sm font-bold mb-2">Tools ({envTools.length})</div>
-              <div className="space-y-1 max-h-40 overflow-y-auto">
-                {envTools.map((tool) => (
-                  <div key={tool.name} className="text-xs">
-                    <span className="text-[#b87df9]">{tool.name}</span>
-                    <span className="text-gray-500 ml-1">- {tool.description}</span>
-                  </div>
-                ))}
-                {envTools.length === 0 && <div className="text-xs text-gray-500">No tools loaded</div>}
+              <div className="flex items-center space-x-2">
+                <a
+                  href="http://localhost:8000/env/status"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-gray-400 hover:text-white"
+                  title="Open in new tab"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                </a>
+                <button className="text-gray-400 hover:text-white" onClick={() => setEnvPaneOpen(false)}>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
               </div>
             </div>
-            {/* Activity */}
-            <div className="flex-1 flex flex-col overflow-hidden p-3">
-              <div className="text-sm font-bold mb-2">Activity</div>
-              <div className="flex-1 overflow-y-auto text-xs space-y-1">
-                {envActivity.map((entry, i) => (
-                  <div key={i} className="flex">
-                    <span className="text-gray-500 flex-none w-20">{new Date(entry.ts).toLocaleTimeString()}</span>
-                    <span className="text-gray-300 ml-2">{entry.message}</span>
+            <div className="overflow-y-auto flex-1">
+              {/* System Prompt */}
+              <div className="border-b border-gray-700">
+                <div className="flex items-center justify-between">
+                  <button className="flex-1 flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setEnvCollapsed(p => ({...p, prompt: !p.prompt}))}>
+                    <span className="text-sm font-bold">System Prompt</span>
+                    <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: envCollapsed.prompt ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                  </button>
+                </div>
+                {!envCollapsed.prompt && (
+                  <div className="px-3 pb-3">
+                    <textarea
+                      className="w-full bg-[#1a1a1a] border border-gray-600 text-xs text-gray-300 p-2 rounded resize-y min-h-[120px] max-h-[400px]"
+                      rows={8}
+                      value={envSystemPrompt}
+                      onChange={(e) => { setEnvSystemPrompt(e.target.value); saveEnvPrompt(e.target.value); }}
+                    />
+                    <div className="flex items-center justify-between mt-1">
+                      {envPromptHistory.length > 0 && (
+                        <select className="bg-[#1a1a1a] border border-gray-600 px-1 py-0.5 text-xs flex-1" value="" onChange={(e) => { const entry = envPromptHistory.find(h => h.id === e.target.value); if (entry) { setEnvSystemPrompt(entry.system_prompt); saveEnvPrompt(entry.system_prompt); } }}>
+                          <option value="" disabled>Restore from history...</option>
+                          {envPromptHistory.map((h) => (<option key={h.id} value={h.id}>{new Date(h.created_at).toLocaleString()} - {h.system_prompt.slice(0, 40)}...</option>))}
+                        </select>
+                      )}
+                      <a
+                        href={`https://supabase.com/dashboard/project/qimpbjvnthrvwsalpgsy/editor?schema=public&table=system_prompt_history&filter=source_table%3Aeq%3Aenvironments%2Csource_name%3Aeq%3A${encodeURIComponent(selectedAgentName)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center space-x-1 text-xs text-[#b87df9] hover:underline ml-2 flex-none"
+                      >
+                        <span>History</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" style={{width: "10px", height: "10px"}} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                    </div>
                   </div>
-                ))}
-                {envActivity.length === 0 && <div className="text-gray-500">No activity yet</div>}
-                <div ref={activityEndRef} />
+                )}
+              </div>
+              {/* Tools */}
+              <div className="border-b border-gray-700">
+                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setEnvCollapsed(p => ({...p, tools: !p.tools}))}>
+                  <span className="text-sm font-bold">Tools ({envTools.length})</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: envCollapsed.tools ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                </button>
+                {!envCollapsed.tools && (
+                  <div className="px-3 pb-3 space-y-1 max-h-40 overflow-y-auto">
+                    {envTools.map((tool) => (
+                      <div key={tool.name} className="text-xs">
+                        <span className="text-[#b87df9]">{tool.name}</span>
+                        <span className="text-gray-500 ml-1">- {tool.description}</span>
+                      </div>
+                    ))}
+                    {envTools.length === 0 && <div className="text-xs text-gray-500">No tools loaded</div>}
+                  </div>
+                )}
+              </div>
+              {/* Activity */}
+              <div className="border-b border-gray-700">
+                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setEnvCollapsed(p => ({...p, activity: !p.activity}))}>
+                  <span className="text-sm font-bold">Activity</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: envCollapsed.activity ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                </button>
+                {!envCollapsed.activity && (
+                  <div className="px-3 pb-3 overflow-y-auto text-xs space-y-1 max-h-[300px]">
+                    {envActivity.map((entry, i) => (
+                      <div key={i} className="flex">
+                        <span className="text-gray-500 flex-none w-20">{new Date(entry.ts).toLocaleTimeString()}</span>
+                        <span className="text-gray-300 ml-2">{entry.message}</span>
+                      </div>
+                    ))}
+                    {envActivity.length === 0 && <div className="text-gray-500">No activity yet</div>}
+                    <div ref={activityEndRef} />
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1184,9 +1320,12 @@ function App() {
       </div>
       <div className="flex justify-between items-center p-2 border-t border-slate-200">
         <div className="flex items-center space-x-2">
-          {/* Use p-2 for padding and bg-gray-100 for a light background */}
-          <button className="bg-blue-500 text-white py-2 px-4 rounded-md" onClick={() => generateThought()}>
-            Generate Thought
+          <button
+            className={`${isGenerating ? "bg-gray-500" : "bg-blue-500"} text-white py-2 px-4 rounded-md`}
+            onClick={() => generateThought()}
+            disabled={isGenerating}
+          >
+            {isGenerating ? "Generating..." : "Generate Thought"}
           </button>
           <button
             className={generatingLoopOn ? (
@@ -1194,88 +1333,36 @@ function App() {
             ) : (
               "bg-blue-500 text-white py-2 px-4 rounded mx-2"
             )}
-          onClick={ () => {
-            setGeneratingLoopOn(currVal => {
-              return !currVal;
-            });
-          }}>
+            onClick={async () => {
+              if (generatingLoopOn) {
+                await stopLoop();
+                setGeneratingLoopOn(false);
+              } else {
+                await startLoop({
+                  delay_ms: 5000,
+                  model: modelSelection,
+                  temperature: modelTemperature,
+                });
+                setGeneratingLoopOn(true);
+              }
+            }}
+          >
             {generatingLoopOn ? (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path fill="#FFFFFF" d="M6 4h4v16H6z" />
                 <path fill="#FFFFFF" d="M14 4h4v16h-4z" />
-              </svg> // Pause icon
+              </svg>
             ) : (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-6 w-6" 
-                fill="currentColor"
-                viewBox="2 5 20 14" 
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M8 5v14l11-7z"
-                />
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="currentColor" viewBox="2 5 20 14" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5v14l11-7z" />
               </svg>
             )}
           </button>
-          {generatingLoopOn && generationTrigger !== null ? (
-            <span className="text-xs">{
-              // round to 0 decimal places
-              msTillNextThought?.toFixed(0) || ""
-            }</span>
-          ) : null }
-          <span className="text-xs text-gray-400 ml-3">Ctrl+Enter to trigger action</span>
-          {/*
-          <label htmlFor="lockScrollToBottom" className="flex items-center space-x-1">
-            <input
-              type="checkbox"
-              id="lockScrollToBottom"
-              checked={lockScrollToBottom}
-              onChange={(e) => {
-                console.log("setting lockScrollToBottom to ", e.target.checked)
-                return setLockScrollToBottom(e.target.checked)
-              }}
-            />
-            <span>Lock to bottom</span>
-          </label>
-          */}
+          {generatingLoopOn && <span className="text-xs text-green-400">Loop running</span>}
+          <span className="text-xs text-gray-400 ml-3">{navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Enter generate | {navigator.platform?.includes("Mac") ? "Option" : "Alt"}+Enter trigger action</span>
         </div>
-        <div className="flex items-center">
-          <label htmlFor="modelSelection" className="ml-3">
-            Model:{" "}
-          </label>
-          <select
-            id="modelSelection"
-            value={modelSelection}
-            onChange={(e) => { setModelSelection(e.target.value); localStorage.setItem("headlong_selected_model", e.target.value); }}
-            className="ml-1"
-          >
-            {models.map(
-              key => (<option key={key} value={key}>{key}</option>)
-            )}
-          </select>
-          <label htmlFor="modelTemperature" className="ml-3">
-            Temperature:{" "}
-          </label>
-          <input
-            type="number"
-            step="0.1"
-            max="1.0"
-            min="0.0"
-            id="modelTemperature"
-            value={modelTemperature}
-            onChange={(e) => setModelTemperature(parseFloat(e.target.value))}
-            className="ml-1 w-14"
-          />
+        <div className="flex items-center text-xs text-gray-500">
+          <span>{modelSelection} | t={modelTemperature}</span>
         </div>
       </div>
     </div>

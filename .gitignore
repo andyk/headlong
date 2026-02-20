@@ -37,4 +37,5 @@ packages/packages/
 thinkers.yaml
 
 .headlong.pids
+.headlong/
 .headlong-logs/

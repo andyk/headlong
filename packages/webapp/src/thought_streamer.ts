@@ -1,8 +1,8 @@
 
-const url = 'http://localhost:8000/';
+const AGENT_URL = 'http://localhost:8001';
 
 async function getModels() {
-  const response = await fetch(url + 'models');
+  const response = await fetch(AGENT_URL + '/models');
   return response.json();
 }
 
@@ -19,43 +19,78 @@ function readChunks(reader: ReadableStreamDefaultReader<Uint8Array>) {
   };
 }
 
-async function streamThought(
+interface GenerateResult {
+  id: string;
+  body: string;
+  index: number;
+  agent_name: string;
+}
+
+async function generateThought(
   options: {
     model: string;
-    sysMessage: string;
-    userMessage: string;
-    assistantMessages: string[];
-    max_tokens?: number;
     temperature?: number;
-    stream?: boolean;
-    onDelta: (delta: string) => void;
-  }): Promise<any> {
-  let decoder = new TextDecoder("utf-8");
-  const request = new Request(url, {
+    max_tokens?: number;
+    agent_name?: string;
+  }): Promise<GenerateResult> {
+  const response = await fetch(AGENT_URL + '/generate', {
     method: "POST",
     headers: {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
       model: options.model,
-      system_message: options.sysMessage,
-      user_message: options.userMessage,
-      assistant_messages: options.assistantMessages,
-      max_tokens: options.max_tokens ?? 100,
       temperature: options.temperature ?? 0.5,
+      max_tokens: options.max_tokens ?? 4096,
+      agent_name: options.agent_name,
     }),
   });
 
-  let reply = "";
-  fetch(request).then(async (response) => {
-    const reader = response.body?.getReader();
-    for await (const chunk of readChunks(reader)) {
-      let decoded_chunk = decoder.decode(chunk);
-      reply = reply.concat(decoded_chunk);
-      options.onDelta(decoded_chunk);
-    }
-  });
-  console.log("Reply:", reply);
+  if (!response.ok) {
+    throw new Error(`Generate failed: ${response.status}`);
+  }
+
+  return response.json();
 }
 
-export { getModels, streamThought }
+async function startLoop(options: {
+  delay_ms?: number;
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+}): Promise<any> {
+  const response = await fetch(AGENT_URL + '/loop/start', {
+    method: "POST",
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+  return response.json();
+}
+
+async function stopLoop(): Promise<any> {
+  const response = await fetch(AGENT_URL + '/loop/stop', { method: "POST" });
+  return response.json();
+}
+
+async function getLoopStatus(): Promise<{ running: boolean }> {
+  const response = await fetch(AGENT_URL + '/loop/status');
+  return response.json();
+}
+
+async function getAgentStatus(): Promise<{
+  agent_name: string;
+  system_prompt: string;
+  model: string;
+  uptime_seconds: number;
+}> {
+  const response = await fetch(AGENT_URL + '/agent/status');
+  return response.json();
+}
+
+async function getAgentActivity(): Promise<{ ts: string; message: string }[]> {
+  const response = await fetch(AGENT_URL + '/agent/activity');
+  return response.json();
+}
+
+export { getModels, generateThought, startLoop, stopLoop, getLoopStatus, getAgentStatus, getAgentActivity }
+export type { GenerateResult }

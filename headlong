@@ -2,20 +2,27 @@
 set -e
 
 REPO_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-PIDFILE="$REPO_ROOT/.headlong.pids"
+STATEDIR="$REPO_ROOT/.headlong"
 LOGDIR="$REPO_ROOT/.headlong-logs"
+SERVICES=(env agent webapp)
+
+# Per-service pidfiles and state
+pidfile_for()  { echo "$STATEDIR/$1.pid"; }
+agentfile()    { echo "$STATEDIR/agent_name"; }
 
 # --- Usage ---
 usage() {
   echo "Usage: ./headlong <command> [options]"
   echo ""
   echo "Commands:"
-  echo "  run <agent_name> [--no-docker]   Start all services in the background"
-  echo "  stop                             Stop all running services"
-  echo "  logs                             Tail logs from all services"
+  echo "  start <agent_name> [--no-docker]   Start all services"
+  echo "  start <service> [--no-docker]      Start a single service (env|agent|webapp)"
+  echo "  stop  [service]                    Stop all or a single service"
+  echo "  status                             Show status of all services"
+  echo "  logs  [service]                    Tail logs (all or one service)"
   echo ""
   echo "Options:"
-  echo "  --no-docker     Force native mode even if Docker is running"
+  echo "  --no-docker     Force native mode for env daemon"
   echo "  --help, -h      Show this help message"
 }
 
@@ -30,177 +37,379 @@ collect_pids() {
   done
 }
 
-# --- Stop command ---
-do_stop() {
-  echo "Stopping Headlong..."
-
-  if [ -f "$PIDFILE" ]; then
-    # Collect all PIDs (parents + children) first
-    ALL_PIDS=()
-    while read -r pid; do
-      while IFS= read -r p; do
-        ALL_PIDS+=("$p")
-      done < <(collect_pids "$pid")
-    done < "$PIDFILE"
-    rm -f "$PIDFILE"
-
-    # Send SIGTERM to all
-    for pid in "${ALL_PIDS[@]}"; do
-      kill "$pid" 2>/dev/null || true
-    done
-
-    # Brief grace period, then SIGKILL any survivors
-    sleep 1
-    for pid in "${ALL_PIDS[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
-        kill -9 "$pid" 2>/dev/null || true
-      fi
-    done
-  else
-    echo "No pidfile found. Nothing to stop."
-  fi
-
-  # Remove Docker container if running
-  docker rm -f headlong-env 2>/dev/null || true
-
-  echo "All processes stopped."
-}
-
-# --- Logs command ---
-do_logs() {
-  if [ ! -d "$LOGDIR" ]; then
-    echo "No logs found. Is Headlong running?"
-    exit 1
-  fi
-  tail -f "$LOGDIR"/*.log
-}
-
-# --- Run command ---
-do_run() {
-  # Parse run arguments
-  AGENT_NAME=""
-  NO_DOCKER=false
-
-  for arg in "$@"; do
-    if [ "$arg" = "--no-docker" ]; then
-      NO_DOCKER=true
-    elif [ -z "$AGENT_NAME" ]; then
-      AGENT_NAME="$arg"
+# --- Check if a service is running ---
+is_running() {
+  local svc=$1
+  local pf
+  pf=$(pidfile_for "$svc")
+  if [ -f "$pf" ]; then
+    local pid
+    pid=$(cat "$pf")
+    if kill -0 "$pid" 2>/dev/null; then
+      return 0
     fi
-  done
-
-  if [ -z "$AGENT_NAME" ]; then
-    echo "Usage: ./headlong run <agent_name> [--no-docker]"
-    echo "Example: ./headlong run \"Bobby Wilder\""
-    exit 1
   fi
+  return 1
+}
 
-  # Auto-detect Docker (unless --no-docker)
-  if $NO_DOCKER; then
-    USE_DOCKER=false
-  elif docker info &>/dev/null; then
-    USE_DOCKER=true
-  else
-    USE_DOCKER=false
-  fi
-
-  # Stop any existing instance first
-  if [ -f "$PIDFILE" ]; then
-    echo "Stopping existing Headlong instance..."
-    do_stop
-  fi
-
-  # Source .env
+# --- Source .env ---
+load_env() {
   if [ -f "$REPO_ROOT/.env" ]; then
     set -a
     source "$REPO_ROOT/.env"
     set +a
   fi
+}
 
-  # Set up log directory
+# --- Get stored agent name ---
+get_agent_name() {
+  local af
+  af=$(agentfile)
+  if [ -f "$af" ]; then
+    cat "$af"
+  else
+    echo ""
+  fi
+}
+
+# --- Start a single service ---
+start_service() {
+  local svc=$1
+  local agent_name=$2
+  local no_docker=${3:-false}
+
+  if is_running "$svc"; then
+    echo "  $svc is already running (PID $(cat "$(pidfile_for "$svc")"))"
+    return
+  fi
+
+  mkdir -p "$LOGDIR" "$STATEDIR"
+  load_env
+
+  case "$svc" in
+    env)
+      # Decide Docker vs native
+      local use_docker=false
+      if ! $no_docker && docker info &>/dev/null; then
+        use_docker=true
+      fi
+
+      if $use_docker; then
+        echo "  Starting env (Docker)..."
+        docker build -q -t headlong-env "$REPO_ROOT/packages/env" >/dev/null
+        docker rm -f headlong-env 2>/dev/null || true
+        docker run -d \
+          --name headlong-env \
+          -e ANTHROPIC_API_KEY \
+          -e SUPABASE_URL_HEADLONG \
+          -e SUPABASE_SERVICE_ROLE_KEY_HEADLONG \
+          -e TELEGRAM_BOT_TOKEN \
+          -e TELEGRAM_CHAT_ID \
+          -e SERPAPI_API_KEY \
+          -e OPENAI_API_KEY \
+          -e OPENROUTER_API_KEY \
+          -p 8000:8000 \
+          -v "$REPO_ROOT":/app/headlong \
+          -w /app/headlong/packages/env \
+          headlong-env \
+          "$agent_name" >/dev/null
+        docker logs -f headlong-env >> "$LOGDIR/env.log" 2>&1 &
+        echo $! > "$(pidfile_for env)"
+      else
+        echo "  Starting env (native)..."
+        (
+          cd "$REPO_ROOT/packages/env"
+          source venv/bin/activate
+          python main.py "$agent_name"
+        ) >> "$LOGDIR/env.log" 2>&1 &
+        echo $! > "$(pidfile_for env)"
+      fi
+      ;;
+
+    agent)
+      echo "  Starting agent..."
+      (
+        cd "$REPO_ROOT/packages/agent"
+        source venv/bin/activate
+        python main.py "$agent_name"
+      ) >> "$LOGDIR/agent.log" 2>&1 &
+      echo $! > "$(pidfile_for agent)"
+      ;;
+
+    webapp)
+      echo "  Starting webapp..."
+      (
+        cd "$REPO_ROOT/packages/webapp"
+        npm run dev
+      ) >> "$LOGDIR/webapp.log" 2>&1 &
+      echo $! > "$(pidfile_for webapp)"
+      ;;
+
+    *)
+      echo "Unknown service: $svc"
+      exit 1
+      ;;
+  esac
+}
+
+# --- Stop a single service ---
+stop_service() {
+  local svc=$1
+  local pf
+  pf=$(pidfile_for "$svc")
+
+  if [ ! -f "$pf" ]; then
+    # Try killing by port as fallback
+    local port
+    case "$svc" in
+      env)    port=8000 ;;
+      agent)  port=8001 ;;
+      webapp) port=5173 ;;
+    esac
+    local port_pid
+    port_pid=$(lsof -ti:"$port" 2>/dev/null | head -1)
+    if [ -n "$port_pid" ]; then
+      echo "  Stopping $svc (port $port, PID $port_pid)..."
+      kill "$port_pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$port_pid" 2>/dev/null || true
+    else
+      echo "  $svc is not running"
+    fi
+    return
+  fi
+
+  local pid
+  pid=$(cat "$pf")
+  echo "  Stopping $svc (PID $pid)..."
+
+  # Collect full process tree
+  local all_pids=()
+  while IFS= read -r p; do
+    all_pids+=("$p")
+  done < <(collect_pids "$pid")
+
+  # SIGTERM
+  for p in "${all_pids[@]}"; do
+    kill "$p" 2>/dev/null || true
+  done
+
+  sleep 1
+
+  # SIGKILL survivors
+  for p in "${all_pids[@]}"; do
+    if kill -0 "$p" 2>/dev/null; then
+      kill -9 "$p" 2>/dev/null || true
+    fi
+  done
+
+  rm -f "$pf"
+
+  # Clean up Docker container for env
+  if [ "$svc" = "env" ]; then
+    docker rm -f headlong-env 2>/dev/null || true
+  fi
+}
+
+# --- Start command ---
+do_start() {
+  local agent_name=""
+  local no_docker=false
+  local target_service=""
+
+  for arg in "$@"; do
+    case "$arg" in
+      --no-docker) no_docker=true ;;
+      env|agent|webapp)
+        target_service="$arg"
+        ;;
+      *)
+        agent_name="$arg"
+        ;;
+    esac
+  done
+
+  # Starting a single service
+  if [ -n "$target_service" ]; then
+    # Need agent name for env and agent services
+    if [ "$target_service" != "webapp" ]; then
+      if [ -z "$agent_name" ]; then
+        agent_name=$(get_agent_name)
+      fi
+      if [ -z "$agent_name" ]; then
+        echo "No agent name found. Run './headlong start <agent_name>' first, or pass one now."
+        exit 1
+      fi
+    fi
+    start_service "$target_service" "$agent_name" "$no_docker"
+    return
+  fi
+
+  # Starting all services — agent name required
+  if [ -z "$agent_name" ]; then
+    agent_name=$(get_agent_name)
+  fi
+  if [ -z "$agent_name" ]; then
+    echo "Usage: ./headlong start <agent_name> [--no-docker]"
+    echo "Example: ./headlong start \"Bobby Wilder\""
+    exit 1
+  fi
+
+  # Save agent name for future single-service starts
+  mkdir -p "$STATEDIR"
+  echo "$agent_name" > "$(agentfile)"
+
+  # Clear logs on full start
   rm -rf "$LOGDIR"
   mkdir -p "$LOGDIR"
 
-  PIDS=()
-
-  # Start env daemon
-  if $USE_DOCKER; then
-    echo "Starting env daemon in Docker..."
-
-    docker build -t headlong-env "$REPO_ROOT/packages/env"
-    docker rm -f headlong-env 2>/dev/null || true
-
-    docker run -d \
-      --name headlong-env \
-      -e ANTHROPIC_API_KEY \
-      -e SUPABASE_URL_HEADLONG \
-      -e SUPABASE_SERVICE_ROLE_KEY_HEADLONG \
-      -e TELEGRAM_BOT_TOKEN \
-      -e TELEGRAM_CHAT_ID \
-      -e SERPAPI_API_KEY \
-      -e OPENAI_API_KEY \
-      -e OPENROUTER_API_KEY \
-      -p 8000:8000 \
-      -v "$REPO_ROOT":/app/headlong \
-      -w /app/headlong/packages/env \
-      headlong-env \
-      "$AGENT_NAME"
-
-    docker logs -f headlong-env >> "$LOGDIR/env.log" 2>&1 &
-    PIDS+=($!)
-  else
-    echo "Starting env daemon (native)..."
-    (
-      cd "$REPO_ROOT/packages/env"
-      source venv/bin/activate
-      python main.py "$AGENT_NAME"
-    ) >> "$LOGDIR/env.log" 2>&1 &
-    PIDS+=($!)
-  fi
-
-  # Start agent daemon
-  echo "Starting agent daemon..."
-  (
-    cd "$REPO_ROOT/packages/agent"
-    source venv/bin/activate
-    python main.py "$AGENT_NAME"
-  ) >> "$LOGDIR/agent.log" 2>&1 &
-  PIDS+=($!)
-
-  # Start webapp
-  echo "Starting webapp..."
-  (
-    cd "$REPO_ROOT/packages/webapp"
-    npm run dev
-  ) >> "$LOGDIR/webapp.log" 2>&1 &
-  PIDS+=($!)
-
-  # Write pidfile
-  printf '%s\n' "${PIDS[@]}" > "$PIDFILE"
+  echo "Starting Headlong for $agent_name..."
+  for svc in "${SERVICES[@]}"; do
+    start_service "$svc" "$agent_name" "$no_docker"
+  done
 
   echo ""
   echo "=== Headlong is running ==="
-  echo "  Agent:   $AGENT_NAME"
-  echo "  Env:     http://localhost:8000  $(if $USE_DOCKER; then echo '(Docker)'; else echo '(native)'; fi)"
+  echo "  Agent:   $agent_name"
+  echo "  Env:     http://localhost:8000"
   echo "  Agent:   http://localhost:8001"
   echo "  Webapp:  http://localhost:5173"
   echo ""
-  echo "Run ./headlong logs to tail output, ./headlong stop to shut down."
+  echo "Run './headlong logs' to tail output, './headlong stop' to shut down."
+}
+
+# --- Stop command ---
+do_stop() {
+  local target_service="${1:-}"
+
+  if [ -n "$target_service" ]; then
+    stop_service "$target_service"
+    return
+  fi
+
+  echo "Stopping Headlong..."
+  for svc in "${SERVICES[@]}"; do
+    stop_service "$svc"
+  done
+  echo "All services stopped."
+}
+
+# --- Logs command ---
+do_logs() {
+  local target_service="${1:-}"
+
+  if [ ! -d "$LOGDIR" ]; then
+    echo "No logs found. Is Headlong running?"
+    exit 1
+  fi
+
+  if [ -n "$target_service" ]; then
+    local logfile="$LOGDIR/$target_service.log"
+    if [ -f "$logfile" ]; then
+      tail -f "$logfile"
+    else
+      echo "No log file for $target_service"
+      exit 1
+    fi
+  else
+    tail -f "$LOGDIR"/*.log
+  fi
+}
+
+# --- Status command ---
+do_status() {
+  echo "=== Headlong Status ==="
+  echo ""
+
+  local agent_name
+  agent_name=$(get_agent_name)
+  if [ -n "$agent_name" ]; then
+    echo "  Agent name: $agent_name"
+    echo ""
+  fi
+
+  echo "  Services:"
+  for svc in "${SERVICES[@]}"; do
+    local port
+    case "$svc" in
+      env)    port=8000 ;;
+      agent)  port=8001 ;;
+      webapp) port=5173 ;;
+    esac
+
+    local pf_pid="" port_pid="" status_icon status_detail
+    pf=$(pidfile_for "$svc")
+    if [ -f "$pf" ]; then
+      pf_pid=$(cat "$pf")
+      if ! kill -0 "$pf_pid" 2>/dev/null; then
+        pf_pid=""
+      fi
+    fi
+    port_pid=$(lsof -ti:"$port" 2>/dev/null | head -1)
+
+    if [ -n "$port_pid" ]; then
+      status_icon="✓"
+      status_detail="http://localhost:$port  (PID $port_pid)"
+    elif [ -n "$pf_pid" ]; then
+      status_icon="~"
+      status_detail="PID $pf_pid (not yet listening on port $port)"
+    else
+      status_icon="✗"
+      status_detail="not running"
+    fi
+
+    printf "    %s %-8s %s\n" "$status_icon" "$svc" "$status_detail"
+  done
+  echo ""
+
+  # Docker container
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^headlong-env$'; then
+    echo "  Docker:  headlong-env container running"
+  fi
+
+  # Agent API live info
+  local agent_status
+  agent_status=$(curl -s --max-time 2 http://localhost:8001/agent/status 2>/dev/null || true)
+  if [ -n "$agent_status" ]; then
+    local api_name uptime
+    api_name=$(echo "$agent_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('agent_name',''))" 2>/dev/null || true)
+    uptime=$(echo "$agent_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('uptime_seconds',0))" 2>/dev/null || true)
+    if [ -n "$api_name" ]; then
+      echo "  Agent:   $api_name (uptime ${uptime}s)"
+    fi
+  fi
+
+  local loop_status
+  loop_status=$(curl -s --max-time 2 http://localhost:8001/loop/status 2>/dev/null || true)
+  if [ -n "$loop_status" ]; then
+    local running
+    running=$(echo "$loop_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running',False))" 2>/dev/null || true)
+    if [ "$running" = "True" ]; then
+      echo "  Loop:    running"
+    else
+      echo "  Loop:    stopped"
+    fi
+  fi
 }
 
 # --- Main dispatch ---
 COMMAND="${1:-}"
 
 case "$COMMAND" in
-  run)
+  start)
     shift
-    do_run "$@"
+    do_start "$@"
     ;;
   stop)
-    do_stop
+    shift
+    do_stop "$@"
+    ;;
+  status)
+    do_status
     ;;
   logs)
-    do_logs
+    shift
+    do_logs "$@"
     ;;
   --help|-h)
     usage

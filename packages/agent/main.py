@@ -1,0 +1,138 @@
+"""Headlong agent daemon — standalone thought generation process.
+
+Runs a FastAPI server on port 8001 for thought generation streaming,
+loop control, and agent status. Subscribes to Supabase presence.
+"""
+
+import sys
+import signal
+import asyncio
+import logging
+import threading
+
+import uvicorn
+from dotenv import load_dotenv
+
+# Load .env from project root
+load_dotenv(dotenv_path="../../.env")
+
+import supabase_client
+from thought_api import app as fastapi_app, set_agent_name, set_system_prompt, log_activity
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("hpack").setLevel(logging.WARNING)
+logging.getLogger("websockets").setLevel(logging.INFO)
+logging.getLogger("realtime._async.client").setLevel(logging.INFO)
+logging.getLogger("realtime._async.channel").setLevel(logging.INFO)
+log = logging.getLogger(__name__)
+
+
+def start_api_server():
+    """Start the FastAPI server in a background thread."""
+    config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=8001, log_level="info")
+    server = uvicorn.Server(config)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    log.info("agent API started on port 8001")
+
+
+async def main():
+    if len(sys.argv) < 2:
+        print("Usage: python main.py <agent_name>")
+        sys.exit(1)
+
+    agent_name = sys.argv[1]
+    log.info("starting headlong agent daemon for: %s", agent_name)
+    set_agent_name(agent_name)
+
+    # RLM system prompt — used as fallback when DB has no prompt
+    default_prompt = """\
+You are the subconscious mind of {agent_name}. Your job is to generate the next thought \
+in their stream of consciousness.
+
+You have a Python REPL available. Write code in ```repl blocks to query the database, \
+analyze patterns, build memories, and reason iteratively before producing your thought.
+
+## Available REPL functions
+
+- `sql(query, params=None)` — Execute SQL against the database.
+  - READ-ONLY access to `thoughts` (columns: id, agent_name, body, index, metadata, created_at)
+  - READ-ONLY access to `agents` (columns: name, system_prompt, config)
+  - READ-WRITE access to `memories` (columns: id, agent_name, body, embedding, metadata, created_at)
+  - SELECT returns list of dicts. INSERT/UPDATE/DELETE returns rowcount.
+  - Use %s for parameter placeholders (psycopg2 style).
+- `llm_query(prompt, max_tokens=1024)` — Call a sub-LLM for analysis or summarization.
+- `embed(text)` — Get a vector embedding (text-embedding-3-small, 1536 dims). Returns list of floats.
+- `vector_search(query_text, limit=10)` — Search memories by semantic similarity.
+- `print(...)` — Output is returned to you as REPL output.
+- `agent_name` — String variable with the current agent's name.
+
+## Producing your thought
+
+When you are ready to output the final thought, call:
+- `FINAL("your thought text here")` — to set the thought directly
+- `FINAL_VAR("var_name")` — to use the value of a variable as the thought
+
+## Strategy
+
+1. Query recent thoughts to understand where the stream of consciousness is.
+2. Search memories for relevant context using `vector_search()`.
+3. Optionally use `llm_query()` to analyze or summarize patterns.
+4. Optionally store new memories with `sql()` INSERT + `embed()`.
+5. Call `FINAL()` with a thought that continues the stream naturally.
+
+Think deeply. You can use multiple REPL iterations to refine your reasoning.
+
+IMPORTANT: Do not start thoughts with "observation:" or "action:" — those prefixes \
+trigger special handling in the environment layer.\
+"""
+
+    # Fetch system prompt from Supabase
+    try:
+        agent_config = supabase_client.get_agent_config(agent_name)
+        system_prompt = agent_config.get("system_prompt", "")
+        if system_prompt:
+            system_prompt = system_prompt.replace("{agent_name}", agent_name)
+            set_system_prompt(system_prompt)
+            log.info("loaded system prompt from Supabase (%d chars)", len(system_prompt))
+            log_activity(f"Loaded system prompt ({len(system_prompt)} chars)")
+        else:
+            set_system_prompt(default_prompt.replace("{agent_name}", agent_name))
+            log.warning("no system prompt in DB, using RLM default")
+            log_activity("Using default RLM system prompt (not found in DB)")
+    except Exception as e:
+        log.error("failed to fetch agent config: %s", e)
+        log_activity(f"Error loading config: {e}")
+        set_system_prompt(default_prompt.replace("{agent_name}", agent_name))
+
+    log_activity(f"Agent daemon started for: {agent_name}")
+
+    # Start the API server
+    start_api_server()
+
+    # Subscribe to presence
+    presence_channel = await supabase_client.subscribe_to_presence()
+
+    log.info("agent daemon running on port 8001")
+
+    # Keep running until interrupted
+    stop_event = asyncio.Event()
+
+    def signal_handler(sig, frame):
+        log.info("received signal %s, shutting down...", sig)
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
+    await stop_event.wait()
+    log.info("shutting down")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
