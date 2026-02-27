@@ -3,6 +3,8 @@
 Provides thought generation streaming, loop control, and agent status.
 """
 
+from typing import Optional
+
 import logging
 import time
 from collections import deque
@@ -65,7 +67,7 @@ MODELS = [
 
 
 class GenerateRequest(BaseModel):
-    agent_name: str | None = None
+    agent_name: Optional[str] = None
     model: str = llm.DEFAULT_MODEL
     temperature: float = llm.DEFAULT_TEMPERATURE
     max_tokens: int = llm.RLM_MAX_TOKENS
