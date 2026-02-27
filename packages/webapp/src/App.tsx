@@ -717,6 +717,33 @@ function App() {
 
         if (thoughtNode) {
           tr.insert(insertPos, thoughtNode).scrollIntoView();
+
+          // Persist the highlight marks to the database so other clients see them on load
+          const markType = isObservation ? "observation_highlight" : "highlight";
+          const serializedMarks = newThought.body.split("\n").reduce((acc, text, index, array) => {
+            if (text !== "") {
+              acc.push([text.length, [{ type: markType }]]);
+            }
+            if (index < array.length - 1) {
+              acc.push([1, null]); // soft_break
+            }
+            return acc;
+          }, [] as any[]);
+          if (!newThought.metadata?.marks) {
+            supabase
+              .from(THOUGHTS_TABLE_NAME)
+              .update({
+                metadata: {
+                  ...newThought.metadata,
+                  last_updated_by: APP_INSTANCE_ID,
+                  marks: serializedMarks,
+                },
+              })
+              .eq("id", newThought.id)
+              .then(({ error }) => {
+                if (error) console.error("Error persisting marks for new thought:", error);
+              });
+          }
         }
       } else if (eventType === "UPDATE") {
         // Update the thought in the editor by replacing the node with updated content
@@ -923,9 +950,17 @@ function App() {
             breakTextAndPushToContent(thought.body.substring(cursor), content, schema);
           }
         } else {
-          // If there are no marks, just create a text node with the entire body
+          // No marks in metadata — infer highlight from content
+          const isObservation = thought.body.trim().toLowerCase().startsWith("observation:");
+          const isHuman = thought.body.trim().toLowerCase().startsWith("action:");
+          const markType = isHuman
+            ? schema.marks.human_highlight
+            : isObservation
+              ? schema.marks.observation_highlight
+              : schema.marks.highlight;
+          const mark = markType.create();
           let c: ProseMirrorNode[] = [];
-          breakTextAndPushToContent(thought.body, c, schema);
+          breakTextAndPushToContent(thought.body, c, schema, [mark]);
           content = c;
         }
 
@@ -1051,7 +1086,7 @@ function App() {
 
   return (
     <div className="App flex flex-col h-screen max-h-screen">
-      <div className="w-screen flex">
+      <div className="w-screen flex bg-gray-100 border-b border-gray-200">
         <svg xmlns="http://www.w3.org/2000/svg" width="61" height="49.5" viewBox="0 0 61 49.5" className="flex-none">
           <rect x="8" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
           <rect x="23" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
@@ -1059,7 +1094,7 @@ function App() {
         </svg>
         <div className="flex-grow flex justify-end space-x-1">
           <button
-            className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-800"
+            className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-200"
             onClick={() => setAgentPaneOpen(prev => !prev)}
           >
             {agentStatus === "attached" ? (
@@ -1080,7 +1115,7 @@ function App() {
             )}
           </button>
           <button
-            className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-800"
+            className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-200"
             onClick={() => setEnvPaneOpen(prev => !prev)}
           >
             {envStatus === "attached" ? (
@@ -1107,8 +1142,8 @@ function App() {
           <div ref={editorRef} className="w-full h-full p-1"></div>
         </div>
         {agentPaneOpen && (
-          <div className="w-1/2 border-l border-gray-600 flex flex-col overflow-hidden bg-[#121212]">
-            <div className="flex items-center justify-between p-3 border-b border-gray-600">
+          <div className="w-1/2 border-l border-gray-200 flex flex-col overflow-hidden bg-gray-50">
+            <div className="flex items-center justify-between p-3 border-b border-gray-200">
               <div className="flex items-center space-x-2">
                 <span className={`inline-block rounded-full ${agentStatus === "attached" ? "bg-green-500" : "bg-red-500"}`} style={{width: "6px", height: "6px"}}></span>
                 <span style={{fontSize: "16px", fontWeight: "bold"}}>Agent</span>
@@ -1116,7 +1151,7 @@ function App() {
                 {agentInfo && <span className="text-xs text-gray-500">uptime: {Math.floor(agentInfo.uptime_seconds / 60)}m {agentInfo.uptime_seconds % 60}s</span>}
               </div>
               <div className="flex items-center space-x-2">
-                <button className="text-gray-400 hover:text-white" onClick={() => setAgentPaneOpen(false)}>
+                <button className="text-gray-400 hover:text-gray-700" onClick={() => setAgentPaneOpen(false)}>
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
                   </svg>
@@ -1125,8 +1160,8 @@ function App() {
             </div>
             <div className="overflow-y-auto flex-1">
               {/* Config */}
-              <div className="border-b border-gray-700">
-                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setAgentCollapsed(p => ({...p, config: !p.config}))}>
+              <div className="border-b border-gray-200">
+                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-200" onClick={() => setAgentCollapsed(p => ({...p, config: !p.config}))}>
                   <span className="text-sm font-bold">Config</span>
                   <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: agentCollapsed.config ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                 </button>
@@ -1134,27 +1169,27 @@ function App() {
                   <div className="px-3 pb-3 space-y-2">
                     <div>
                       <label className="text-xs text-gray-400 block mb-1">Agent</label>
-                      <select className="bg-[#1a1a1a] border border-gray-600 px-2 py-1 text-sm w-full" value={selectedAgentName} onChange={(e) => { setSelectedAgentName(e.target.value); localStorage.setItem("headlong_selected_agent", e.target.value); }}>
+                      <select className="bg-white border border-gray-300 px-2 py-1 text-sm w-full" value={selectedAgentName} onChange={(e) => { setSelectedAgentName(e.target.value); localStorage.setItem("headlong_selected_agent", e.target.value); }}>
                         {agentNames.map((name) => (<option key={name} value={name}>{name}</option>))}
                       </select>
                     </div>
                     <div>
                       <label className="text-xs text-gray-400 block mb-1">Model</label>
-                      <select className="bg-[#1a1a1a] border border-gray-600 px-2 py-1 text-sm w-full" value={modelSelection} onChange={(e) => { setModelSelection(e.target.value); localStorage.setItem("headlong_selected_model", e.target.value); }}>
+                      <select className="bg-white border border-gray-300 px-2 py-1 text-sm w-full" value={modelSelection} onChange={(e) => { setModelSelection(e.target.value); localStorage.setItem("headlong_selected_model", e.target.value); }}>
                         {models.map((key) => (<option key={key} value={key}>{key}</option>))}
                       </select>
                     </div>
                     <div>
                       <label className="text-xs text-gray-400 block mb-1">Temperature</label>
-                      <input type="number" step="0.1" max="1.0" min="0.0" value={modelTemperature} onChange={(e) => setModelTemperature(parseFloat(e.target.value))} className="bg-[#1a1a1a] border border-gray-600 px-2 py-1 text-sm w-20" />
+                      <input type="number" step="0.1" max="1.0" min="0.0" value={modelTemperature} onChange={(e) => setModelTemperature(parseFloat(e.target.value))} className="bg-white border border-gray-300 px-2 py-1 text-sm w-20" />
                     </div>
                   </div>
                 )}
               </div>
               {/* System Prompt */}
-              <div className="border-b border-gray-700">
+              <div className="border-b border-gray-200">
                 <div className="flex items-center justify-between">
-                  <button className="flex-1 flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setAgentCollapsed(p => ({...p, prompt: !p.prompt}))}>
+                  <button className="flex-1 flex items-center justify-between p-3 hover:bg-gray-200" onClick={() => setAgentCollapsed(p => ({...p, prompt: !p.prompt}))}>
                     <span className="text-sm font-bold">System Prompt</span>
                     <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: agentCollapsed.prompt ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                   </button>
@@ -1162,14 +1197,14 @@ function App() {
                 {!agentCollapsed.prompt && (
                   <div className="px-3 pb-3">
                     <textarea
-                      className="w-full bg-[#1a1a1a] border border-gray-600 text-xs text-gray-300 p-2 rounded resize-y min-h-[120px] max-h-[400px]"
+                      className="w-full bg-white border border-gray-300 text-xs text-gray-700 p-2 rounded resize-y min-h-[120px] max-h-[400px]"
                       rows={8}
                       value={agentSystemPrompt}
                       onChange={(e) => { setAgentSystemPrompt(e.target.value); saveAgentPrompt(e.target.value); }}
                     />
                     <div className="flex items-center justify-between mt-1">
                       {agentPromptHistory.length > 0 && (
-                        <select className="bg-[#1a1a1a] border border-gray-600 px-1 py-0.5 text-xs flex-1" value="" onChange={(e) => { const entry = agentPromptHistory.find(h => h.id === e.target.value); if (entry) { setAgentSystemPrompt(entry.system_prompt); saveAgentPrompt(entry.system_prompt); } }}>
+                        <select className="bg-white border border-gray-300 px-1 py-0.5 text-xs flex-1" value="" onChange={(e) => { const entry = agentPromptHistory.find(h => h.id === e.target.value); if (entry) { setAgentSystemPrompt(entry.system_prompt); saveAgentPrompt(entry.system_prompt); } }}>
                           <option value="" disabled>Restore from history...</option>
                           {agentPromptHistory.map((h) => (<option key={h.id} value={h.id}>{new Date(h.created_at).toLocaleString()} - {h.system_prompt.slice(0, 40)}...</option>))}
                         </select>
@@ -1190,8 +1225,8 @@ function App() {
                 )}
               </div>
               {/* Activity */}
-              <div className="border-b border-gray-700 flex-1 flex flex-col min-h-0">
-                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setAgentCollapsed(p => ({...p, activity: !p.activity}))}>
+              <div className="border-b border-gray-200 flex-1 flex flex-col min-h-0">
+                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-200" onClick={() => setAgentCollapsed(p => ({...p, activity: !p.activity}))}>
                   <span className="text-sm font-bold">Activity</span>
                   <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: agentCollapsed.activity ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                 </button>
@@ -1200,7 +1235,7 @@ function App() {
                     {agentActivity.map((entry, i) => (
                       <div key={i} className="flex">
                         <span className="text-gray-500 flex-none w-20">{new Date(entry.ts).toLocaleTimeString()}</span>
-                        <span className="text-gray-300 ml-2">{entry.message}</span>
+                        <span className="text-gray-600 ml-2">{entry.message}</span>
                       </div>
                     ))}
                     {agentActivity.length === 0 && <div className="text-gray-500">No activity yet</div>}
@@ -1212,8 +1247,8 @@ function App() {
           </div>
         )}
         {envPaneOpen && (
-          <div className="w-1/2 border-l border-gray-600 flex flex-col overflow-hidden bg-[#121212]">
-            <div className="flex items-center justify-between p-3 border-b border-gray-600">
+          <div className="w-1/2 border-l border-gray-200 flex flex-col overflow-hidden bg-gray-50">
+            <div className="flex items-center justify-between p-3 border-b border-gray-200">
               <div className="flex items-center space-x-2">
                 <span className={`inline-block rounded-full ${envStatus === "attached" ? "bg-green-500" : "bg-red-500"}`} style={{width: "6px", height: "6px"}}></span>
                 <span style={{fontSize: "16px", fontWeight: "bold"}}>Environment</span>
@@ -1224,14 +1259,14 @@ function App() {
                   href="http://localhost:8000/env/status"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-gray-400 hover:text-white"
+                  className="text-gray-400 hover:text-gray-700"
                   title="Open in new tab"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                   </svg>
                 </a>
-                <button className="text-gray-400 hover:text-white" onClick={() => setEnvPaneOpen(false)}>
+                <button className="text-gray-400 hover:text-gray-700" onClick={() => setEnvPaneOpen(false)}>
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
                   </svg>
@@ -1240,9 +1275,9 @@ function App() {
             </div>
             <div className="overflow-y-auto flex-1">
               {/* System Prompt */}
-              <div className="border-b border-gray-700">
+              <div className="border-b border-gray-200">
                 <div className="flex items-center justify-between">
-                  <button className="flex-1 flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setEnvCollapsed(p => ({...p, prompt: !p.prompt}))}>
+                  <button className="flex-1 flex items-center justify-between p-3 hover:bg-gray-200" onClick={() => setEnvCollapsed(p => ({...p, prompt: !p.prompt}))}>
                     <span className="text-sm font-bold">System Prompt</span>
                     <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: envCollapsed.prompt ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                   </button>
@@ -1250,14 +1285,14 @@ function App() {
                 {!envCollapsed.prompt && (
                   <div className="px-3 pb-3">
                     <textarea
-                      className="w-full bg-[#1a1a1a] border border-gray-600 text-xs text-gray-300 p-2 rounded resize-y min-h-[120px] max-h-[400px]"
+                      className="w-full bg-white border border-gray-300 text-xs text-gray-700 p-2 rounded resize-y min-h-[120px] max-h-[400px]"
                       rows={8}
                       value={envSystemPrompt}
                       onChange={(e) => { setEnvSystemPrompt(e.target.value); saveEnvPrompt(e.target.value); }}
                     />
                     <div className="flex items-center justify-between mt-1">
                       {envPromptHistory.length > 0 && (
-                        <select className="bg-[#1a1a1a] border border-gray-600 px-1 py-0.5 text-xs flex-1" value="" onChange={(e) => { const entry = envPromptHistory.find(h => h.id === e.target.value); if (entry) { setEnvSystemPrompt(entry.system_prompt); saveEnvPrompt(entry.system_prompt); } }}>
+                        <select className="bg-white border border-gray-300 px-1 py-0.5 text-xs flex-1" value="" onChange={(e) => { const entry = envPromptHistory.find(h => h.id === e.target.value); if (entry) { setEnvSystemPrompt(entry.system_prompt); saveEnvPrompt(entry.system_prompt); } }}>
                           <option value="" disabled>Restore from history...</option>
                           {envPromptHistory.map((h) => (<option key={h.id} value={h.id}>{new Date(h.created_at).toLocaleString()} - {h.system_prompt.slice(0, 40)}...</option>))}
                         </select>
@@ -1278,8 +1313,8 @@ function App() {
                 )}
               </div>
               {/* Tools */}
-              <div className="border-b border-gray-700">
-                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setEnvCollapsed(p => ({...p, tools: !p.tools}))}>
+              <div className="border-b border-gray-200">
+                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-200" onClick={() => setEnvCollapsed(p => ({...p, tools: !p.tools}))}>
                   <span className="text-sm font-bold">Tools ({envTools.length})</span>
                   <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: envCollapsed.tools ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                 </button>
@@ -1296,8 +1331,8 @@ function App() {
                 )}
               </div>
               {/* Activity */}
-              <div className="border-b border-gray-700">
-                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-800" onClick={() => setEnvCollapsed(p => ({...p, activity: !p.activity}))}>
+              <div className="border-b border-gray-200">
+                <button className="w-full flex items-center justify-between p-3 hover:bg-gray-200" onClick={() => setEnvCollapsed(p => ({...p, activity: !p.activity}))}>
                   <span className="text-sm font-bold">Activity</span>
                   <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: envCollapsed.activity ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                 </button>
@@ -1306,7 +1341,7 @@ function App() {
                     {envActivity.map((entry, i) => (
                       <div key={i} className="flex">
                         <span className="text-gray-500 flex-none w-20">{new Date(entry.ts).toLocaleTimeString()}</span>
-                        <span className="text-gray-300 ml-2">{entry.message}</span>
+                        <span className="text-gray-600 ml-2">{entry.message}</span>
                       </div>
                     ))}
                     {envActivity.length === 0 && <div className="text-gray-500">No activity yet</div>}
