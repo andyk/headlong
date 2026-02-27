@@ -337,6 +337,7 @@ export type Database = {
           agent_name: string
           body: string
           created_at: string
+          created_by: string | null
           id: string
           index: number
           metadata: Json | null
@@ -346,6 +347,7 @@ export type Database = {
           agent_name: string
           body?: string
           created_at?: string
+          created_by?: string | null
           id?: string
           index: number
           metadata?: Json | null
@@ -355,6 +357,7 @@ export type Database = {
           agent_name?: string
           body?: string
           created_at?: string
+          created_by?: string | null
           id?: string
           index?: number
           metadata?: Json | null

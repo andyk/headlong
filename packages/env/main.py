@@ -4,6 +4,7 @@ Runs the agent loop (Supabase realtime -> Claude -> tools -> thoughts)
 and serves the thought streaming API for the webapp on port 8000.
 """
 
+import os
 import sys
 import signal
 import asyncio
@@ -61,6 +62,8 @@ async def embed_thought(thought: dict) -> None:
         log.warning("failed to embed thought %s: %s", thought_id, e)
 
 
+_handled_ids: set[str] = set()
+
 async def handle_thought(thought: dict, agent_name: str) -> None:
     """Handle an incoming thought that needs action."""
     body = thought.get("body", "")
@@ -75,6 +78,12 @@ async def handle_thought(thought: dict, agent_name: str) -> None:
         return
 
     thought_id = thought.get("id")
+
+    # Dedup: Realtime can deliver the same thought multiple times
+    if thought_id in _handled_ids:
+        return
+    _handled_ids.add(thought_id)
+
     thought_index = thought.get("index", 0)
     log.info(
         "handling ACTION (needs_handling). id=%s index=%s body=%s...",
@@ -176,10 +185,20 @@ async def main():
     # Start the thought streaming API server
     start_api_server()
 
+    # Realtime heartbeat — periodically verify the subscription is alive
+    # by writing a probe row and checking if the callback fires.
+    HEARTBEAT_INTERVAL = 120  # seconds between checks
+    HEARTBEAT_TIMEOUT = 15    # seconds to wait for callback
+    heartbeat_event = asyncio.Event()
+
     # Subscribe to thoughts via Supabase Realtime (async)
     loop = asyncio.get_running_loop()
 
     def on_thought(thought: dict):
+        # Signal heartbeat if this is a probe thought
+        if thought.get("body", "").startswith("__heartbeat_probe__"):
+            heartbeat_event.set()
+            return  # don't process probe thoughts
         loop.call_soon_threadsafe(
             asyncio.ensure_future, handle_thought(thought, agent_name)
         )
@@ -202,6 +221,48 @@ async def main():
 
     log.info("env daemon running. Listening for thoughts...")
     log.info("registered tools: %s", list(tools.TOOLS.keys()))
+
+    async def realtime_heartbeat():
+        nonlocal channel
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            heartbeat_event.clear()
+            probe_id = None
+            try:
+                # Insert a probe thought
+                sb = supabase_client.get_client()
+                result = sb.table("thoughts").insert({
+                    "agent_name": agent_name,
+                    "body": "__heartbeat_probe__",
+                    "index": -1,
+                }).execute()
+                if result.data:
+                    probe_id = result.data[0]["id"]
+
+                # Wait for the callback to fire
+                try:
+                    await asyncio.wait_for(heartbeat_event.wait(), timeout=HEARTBEAT_TIMEOUT)
+                    log.debug("realtime heartbeat OK")
+                except asyncio.TimeoutError:
+                    log.warning("realtime heartbeat FAILED — resubscribing")
+                    log_activity("Realtime heartbeat failed — resubscribing")
+                    try:
+                        await channel.unsubscribe()
+                    except Exception:
+                        pass
+                    channel = await supabase_client.subscribe_to_thoughts(on_thought)
+                    log_activity("Realtime resubscribed")
+            except Exception as e:
+                log.warning("realtime heartbeat error: %s", e)
+            finally:
+                # Clean up the probe thought
+                if probe_id:
+                    try:
+                        sb.table("thoughts").delete().eq("id", probe_id).execute()
+                    except Exception:
+                        pass
+
+    asyncio.ensure_future(realtime_heartbeat())
 
     # Keep running until interrupted
     stop_event = asyncio.Event()

@@ -62,7 +62,7 @@ async def compute_insert_index(agent_name: str, insert_after_index: float) -> fl
         return (insert_after_index + rows[0]["index"]) / 2
 
 
-async def add_thought(agent_name: str, body: str, insert_after_index: Optional[float] = None) -> None:
+async def add_thought(agent_name: str, body: str, insert_after_index: Optional[float] = None, created_by: str = "env") -> None:
     """Insert a new thought into the database."""
     log.info("adding thought: %s (after index: %s)", body[:100], insert_after_index)
     sb = get_client()
@@ -84,6 +84,7 @@ async def add_thought(agent_name: str, body: str, insert_after_index: Optional[f
             "agent_name": agent_name,
             "body": body,
             "index": max_index + 1.0,
+            "created_by": created_by,
         }).execute()
     else:
         computed_index = await compute_insert_index(agent_name, insert_after_index)
@@ -94,6 +95,7 @@ async def add_thought(agent_name: str, body: str, insert_after_index: Optional[f
                 "agent_name": agent_name,
                 "body": body,
                 "index": computed_index,
+                "created_by": created_by,
             })
             .execute()
         )

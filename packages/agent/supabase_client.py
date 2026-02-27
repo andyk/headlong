@@ -63,7 +63,7 @@ def get_recent_thought_bodies(agent_name: str, limit: int = 50) -> list[str]:
     return [r["body"] for r in rows if r.get("body")]
 
 
-def add_thought(agent_name: str, body: str, index: float, metadata: Optional[dict] = None) -> dict:
+def add_thought(agent_name: str, body: str, index: float, metadata: Optional[dict] = None, created_by: str = "agent") -> dict:
     """Write a completed thought to the database. Returns the inserted row."""
     sb = get_client()
     row = {
@@ -71,6 +71,7 @@ def add_thought(agent_name: str, body: str, index: float, metadata: Optional[dic
         "body": body,
         "index": index,
         "metadata": metadata or {"last_updated_by": AGENT_INSTANCE_ID},
+        "created_by": created_by,
     }
     result = sb.table("thoughts").insert(row).execute()
     log.info("added thought index=%.2f body=%s...", index, body[:80])
