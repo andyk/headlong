@@ -26,18 +26,33 @@ def get_client() -> anthropic.Anthropic:
     return _client
 
 
+_env_system_prompt: str = ""
+
+
+def set_env_system_prompt(prompt: str) -> None:
+    """Set the base system prompt fetched from Supabase."""
+    global _env_system_prompt
+    _env_system_prompt = prompt
+
+
 def build_system_prompt(tool_descriptions: list[str]) -> str:
-    """Build the system prompt with available tool descriptions."""
+    """Build the system prompt with available tool descriptions.
+
+    Uses the base prompt from Supabase (or a default fallback)
+    and appends the available tools list.
+    """
     tools_list = "\n".join(f"- {desc}" for desc in tool_descriptions)
-    return f"""Your job is to consider your recent thoughts and then take an action.
-The way you take action is by calling one of the available tools with appropriate arguments.
+    base = _env_system_prompt or (
+        "Your job is to consider your recent thoughts and then take an action.\n"
+        "The way you take action is by calling one of the available tools with appropriate arguments.\n"
+        "If you don't think any tool is appropriate for this action, respond with text starting with "
+        "\"observation: \" explaining what you observe or that you don't know how to do that.\n"
+        "When deciding what action to take, use the following stream of recent thoughts for context."
+    )
+    return f"""{base}
 
 Available tools:
-{tools_list}
-
-If you don't think any tool is appropriate for this action, respond with text starting with "observation: " explaining what you observe or that you don't know how to do that.
-
-When deciding what action to take, use the following stream of recent thoughts for context."""
+{tools_list}"""
 
 
 def build_messages(thoughts: list[dict]) -> list[dict]:
@@ -125,36 +140,3 @@ def generate_action(
         return {"type": "text", "content": text_block.text}
 
     return {"type": "text", "content": "observation: no response from Claude"}
-
-
-async def stream_completion(
-    system_message: str,
-    user_message: str,
-    assistant_messages: list[str],
-    model: str = DEFAULT_MODEL,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
-    temperature: float = DEFAULT_TEMPERATURE,
-):
-    """Stream a completion from Claude for the thought streaming API.
-
-    Yields text chunks as they arrive.
-    """
-    client = get_client()
-
-    # Build messages in the prompted thought stream format
-    messages = []
-    messages.append({"role": "user", "content": user_message})
-    for msg in assistant_messages:
-        if msg:
-            messages.append({"role": "assistant", "content": msg})
-            messages.append({"role": "user", "content": user_message})
-
-    with client.messages.stream(
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=system_message,
-        messages=messages,
-    ) as stream:
-        for text in stream.text_stream:
-            yield text

@@ -4,11 +4,29 @@ import os
 import logging
 from typing import Optional, Callable
 
+import re
+
 import anthropic
 
 import repl as repl_module
 
 log = logging.getLogger(__name__)
+
+# Pattern to find FINAL("...") or FINAL('...') anywhere in the text.
+# Captures the inner string. Uses a greedy match on the content to handle
+# nested quotes, and looks for the closing quote+paren near end of text.
+_FINAL_CALL_RE = re.compile(
+    r'FINAL\(\s*["\'](.*?)["\']\s*\)\s*$',
+    re.DOTALL,
+)
+
+
+def _strip_final_wrapper(text: str) -> str:
+    """If text contains FINAL("..."), extract just the inner string."""
+    m = _FINAL_CALL_RE.search(text.strip())
+    if m:
+        return m.group(1).strip()
+    return text.strip()
 
 DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 DEFAULT_MAX_TOKENS = 1024
@@ -107,7 +125,7 @@ async def run_rlm_loop(
             log.info("RLM: no repl blocks found, using response as thought")
             if on_step:
                 on_step("No REPL blocks, using response directly")
-            return assistant_text.strip()
+            return _strip_final_wrapper(assistant_text)
 
         # Execute each block
         all_output = []
@@ -133,4 +151,5 @@ async def run_rlm_loop(
     if on_step:
         on_step(f"Max iterations reached")
     # Return the last assistant message as fallback
-    return messages[-2]["content"].strip() if len(messages) >= 2 else ""
+    last = messages[-2]["content"].strip() if len(messages) >= 2 else ""
+    return _strip_final_wrapper(last)

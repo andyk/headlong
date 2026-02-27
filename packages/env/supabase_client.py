@@ -164,6 +164,19 @@ async def subscribe_to_thoughts(callback: Callable):
     return channel
 
 
+def update_thought_embedding(thought_id: str, embedding: list[float]) -> None:
+    """Store an embedding vector for a thought."""
+    sb = get_client()
+    sb.table("thoughts").update({"embedding": str(embedding)}).eq("id", thought_id).execute()
+
+
+def get_environment_config(name: str) -> dict:
+    """Fetch system_prompt + config from environments table."""
+    sb = get_client()
+    result = sb.table("environments").select("name, system_prompt, config").eq("name", name).single().execute()
+    return result.data
+
+
 async def subscribe_to_presence():
     """Subscribe to presence channel and track env status so the webapp sees us."""
     sb = await get_async_client()

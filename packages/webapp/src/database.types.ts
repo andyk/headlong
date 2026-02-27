@@ -37,18 +37,75 @@ export type Database = {
       agents: {
         Row: {
           created_at: string
+          id: string
           name: string
+          system_prompt: string
+          config: Json
           thoughts: Json
         }
         Insert: {
           created_at?: string
+          id?: string
           name: string
+          system_prompt?: string
+          config?: Json
           thoughts?: Json
         }
         Update: {
           created_at?: string
+          id?: string
           name?: string
+          system_prompt?: string
+          config?: Json
           thoughts?: Json
+        }
+        Relationships: []
+      }
+      environments: {
+        Row: {
+          id: string
+          name: string
+          system_prompt: string
+          config: Json
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          name: string
+          system_prompt?: string
+          config?: Json
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          name?: string
+          system_prompt?: string
+          config?: Json
+          created_at?: string
+        }
+        Relationships: []
+      }
+      system_prompt_history: {
+        Row: {
+          id: string
+          source_table: string
+          source_name: string
+          system_prompt: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          source_table: string
+          source_name: string
+          system_prompt: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          source_table?: string
+          source_name?: string
+          system_prompt?: string
+          created_at?: string
         }
         Relationships: []
       }

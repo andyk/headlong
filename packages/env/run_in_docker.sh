@@ -1,45 +1,48 @@
 #!/bin/bash
+set -e
 
 # Get the directory of the current script
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+REPO_ROOT="$SCRIPT_DIR/../.."
 
-# Define the path for the shell history file in the script directory
-HISTORY_FILE="$SCRIPT_DIR/bash_history"
+IMAGE_NAME="headlong-env"
+CONTAINER_NAME="headlong-env"
+AGENT_NAME="${1:-}"
 
-# Check if the history file exists, if not, create an empty one
-if [ ! -f "$HISTORY_FILE" ]; then
-    touch "$HISTORY_FILE"
+if [ -z "$AGENT_NAME" ]; then
+  echo "Usage: ./run_in_docker.sh <agent_name>"
+  echo "Example: ./run_in_docker.sh andy"
+  exit 1
 fi
 
-# Check if node:latest image is available
-if [[ "$(docker images -q node:latest 2> /dev/null)" == "" ]]; then
-  echo "node:latest image not found. Pulling from Docker Hub..."
-  docker pull node:latest
+# Load .env from repo root so env vars are available for docker run
+if [ -f "$REPO_ROOT/.env" ]; then
+  set -a
+  source "$REPO_ROOT/.env"
+  set +a
 fi
 
-# Run the Docker command with relative paths and mount the history file
+# Remove any stopped container with the same name
+docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+# Build the image from the Dockerfile
+echo "Building $IMAGE_NAME image..."
+docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+
+# Run the container
+echo "Starting env daemon for agent: $AGENT_NAME"
 docker run -it \
-  -e OPENAI_API_KEY \
-  -e SUPABASE_SERVICE_ROLE_KEY_HEADLONG \
+  --name "$CONTAINER_NAME" \
+  -e ANTHROPIC_API_KEY \
   -e SUPABASE_URL_HEADLONG \
+  -e SUPABASE_SERVICE_ROLE_KEY_HEADLONG \
+  -e TELEGRAM_BOT_TOKEN \
+  -e TELEGRAM_CHAT_ID \
   -e SERPAPI_API_KEY \
-  -e TWILIO_ACCOUNT_SID \
-  -e TWILIO_AUTH_TOKEN \
-  -e TWILIO_PHONE_NUMBER \
-  -v "$SCRIPT_DIR"/../..:/app/headlong \
-  -v "$HISTORY_FILE":/root/.bash_history \
+  -e OPENAI_API_KEY \
+  -e OPENROUTER_API_KEY \
+  -p 8000:8000 \
+  -v "$REPO_ROOT":/app/headlong \
   -w /app/headlong/packages/env \
-  --name headlong-env \
-node /bin/bash
-# you need to install ht binary first (UPDATE THE `ht` VERSION IN URL BELOW TO THE NEWEST VERSION)
-# wget https://github.com/andyk/ht/releases/download/v0.1.1/ht-aarch64-unknown-linux-gnu.ht-aarch64-unknown-linux-gnu
-# mv ht-aarch64-unknown-linux-gnu.ht-aarch64-unknown-linux-gnu /usr/local/bin/ht
-# chmod +x /usr/local/bin/ht
-#
-# you may also want to install nano via the following:
-# apt-get update
-# apt-get install nano
-#
-# node npm install
-# node npm run env
-
+  "$IMAGE_NAME" \
+  "$AGENT_NAME"

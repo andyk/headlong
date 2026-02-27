@@ -1,6 +1,7 @@
-"""FastAPI thought streaming API (merged from thought_server).
+"""FastAPI API for the Environment daemon.
 
-Provides endpoints for the webapp to stream thought generation via Claude.
+Provides env status and activity endpoints for the webapp.
+Thought streaming has moved to the Agent daemon (port 8001).
 """
 
 import logging
@@ -9,11 +10,8 @@ from collections import deque
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-
-import llm
 
 log = logging.getLogger(__name__)
 
@@ -45,43 +43,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Available models (Claude variants)
-MODELS = [
-    "claude-sonnet-4-5-20250929",
-    "claude-haiku-4-5-20251001",
-    "claude-opus-4-6",
-]
-
-
-class CompletionRequest(BaseModel):
-    model: str
-    system_message: str
-    user_message: str
-    assistant_messages: list[str]
-    max_tokens: int = 1024
-    temperature: float = 0.5
-
-
-@app.get("/models")
-def get_models():
-    return JSONResponse(content=MODELS)
-
-
-@app.post("/")
-async def stream_thought(item: CompletionRequest):
-    log.info("received thought stream request for model: %s", item.model)
-    return StreamingResponse(
-        llm.stream_completion(
-            system_message=item.system_message,
-            user_message=item.user_message,
-            assistant_messages=item.assistant_messages,
-            model=item.model,
-            max_tokens=item.max_tokens,
-            temperature=item.temperature,
-        ),
-        media_type="text/event-stream",
-    )
 
 
 @app.get("/env/status")

@@ -8,6 +8,7 @@ from tools.web import TOOL as web_tool
 from tools.terminal import TOOL as terminal_tool, TOOLS as terminal_tools
 from tools.telegram import TOOL as telegram_tool
 from tools.time_tool import TOOL as time_tool
+from tools.claude_code import TOOL as claude_code_tool
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ def register_all() -> None:
         register_tool(t)
     register_tool(telegram_tool)
     register_tool(time_tool)
+    register_tool(claude_code_tool)
     log.info("registered tools: %s", list(TOOLS.keys()))
 
 

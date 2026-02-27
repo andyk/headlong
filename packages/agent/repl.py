@@ -68,7 +68,10 @@ def execute_repl_block(code: str, namespace: dict) -> str:
     except Exception:
         buf.write(traceback.format_exc())
 
-    return buf.getvalue()
+    output = buf.getvalue()
+    log.debug("REPL code:\n%s", code[:500])
+    log.debug("REPL output:\n%s", output[:1000] if output else "(empty)")
+    return output
 
 
 def _get_repl_connection():
@@ -122,11 +125,11 @@ def create_repl_namespace(agent_name: str, llm_module) -> tuple[dict, _FinalResu
         return response.data[0].embedding
 
     def vector_search(query_text: str, limit: int = 10) -> list[dict]:
-        """Embed query text and search memories by cosine similarity."""
+        """Embed query text and search thoughts by cosine similarity."""
         query_embedding = embed(query_text)
         return sql(
-            "SELECT id, agent_name, body, metadata, created_at "
-            "FROM memories WHERE agent_name = %s "
+            "SELECT id, agent_name, body, created_at "
+            "FROM thoughts WHERE agent_name = %s AND embedding IS NOT NULL "
             "ORDER BY embedding <=> %s::vector LIMIT %s",
             [agent_name, str(query_embedding), limit],
         )

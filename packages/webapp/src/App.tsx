@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import "./App-compiled.css";
-import { Schema, Mark, Node as ProseMirrorNode } from "prosemirror-model";
+import { Schema, Mark, Node as ProseMirrorNode, Fragment, Slice } from "prosemirror-model";
 import { EditorState, Transaction, Selection as ProsemirrorSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
 import { joinTextblockBackward } from "prosemirror-commands";
@@ -121,6 +121,11 @@ function App() {
   const generateThoughtRef = useRef<() => void>(() => {});
   const [agentCollapsed, setAgentCollapsed] = useState<Record<string, boolean>>({});
   const [envCollapsed, setEnvCollapsed] = useState<Record<string, boolean>>({});
+  const [actionStatus, setActionStatus] = useState<{
+    status: "sent" | "processing" | "complete";
+    action: string;
+  } | null>(null);
+  const actionStatusTimerRef = useRef<number | null>(null);
 
   function computeNewThoughtIndex(state: EditorState, appendToEnd?: boolean) {
     let newThought = null;
@@ -237,22 +242,33 @@ function App() {
     },
   });
 
-  const altEnterKeyPlugin = keymap({
-    "Alt-Enter": (state, dispatch) => {
-      if (dispatch) {
-        const currentThoughtPos = state.selection.$head.before();
-        const node = state.doc.nodeAt(currentThoughtPos);
+  function dispatchAction(state: EditorState, dispatch) {
+    if (dispatch) {
+      const currentThoughtPos = state.selection.$head.before();
+      const node = state.doc.nodeAt(currentThoughtPos);
 
-        if (node && node.type.name === "thought") {
-          const metadataAttr = { ...node.attrs.metadata, needs_handling: true };
-          const transaction = state.tr.setNodeAttribute(currentThoughtPos, "metadata", metadataAttr);
-          dispatch(transaction);
-          return true;
-        }
+      if (node && node.type.name === "thought") {
+        const metadataAttr = { ...node.attrs.metadata, needs_handling: true };
+        const transaction = state.tr.setNodeAttribute(currentThoughtPos, "metadata", metadataAttr);
+        dispatch(transaction);
+
+        const text = node.textContent.trim();
+        setActionStatus({ status: "sent", action: text.slice(0, 50) });
+        if (actionStatusTimerRef.current) clearTimeout(actionStatusTimerRef.current);
+        actionStatusTimerRef.current = window.setTimeout(() => {
+          setActionStatus(prev => prev ? { ...prev, status: "processing" } : null);
+        }, 1500);
+
+        return true;
       }
+    }
 
-      return false;
-    },
+    return false;
+  }
+
+  const altEnterKeyPlugin = keymap({
+    "Alt-Enter": dispatchAction,
+    "Shift-Alt-Enter": dispatchAction,
   });
 
   const modEnterKeyPlugin = keymap({
@@ -745,6 +761,19 @@ function App() {
               });
           }
         }
+
+        if (isObservation) {
+          setActionStatus(prev => {
+            if (prev) {
+              if (actionStatusTimerRef.current) clearTimeout(actionStatusTimerRef.current);
+              actionStatusTimerRef.current = window.setTimeout(() => {
+                setActionStatus(null);
+              }, 2500);
+              return { ...prev, status: "complete" };
+            }
+            return null;
+          });
+        }
       } else if (eventType === "UPDATE") {
         // Update the thought in the editor by replacing the node with updated content
         let cursor = 0; // A cursor to track our position as we apply marks
@@ -808,6 +837,11 @@ function App() {
 
       if (tr.docChanged) {
         editorViewRef.current.updateState(state.apply(tr));
+        // updateState doesn't trigger scrollIntoView, so scroll manually
+        const scrollParent = editorViewRef.current.dom.parentElement?.parentElement;
+        if (scrollParent) {
+          scrollParent.scrollTo({ top: scrollParent.scrollHeight, behavior: "smooth" });
+        }
       }
     };
 
@@ -1003,6 +1037,21 @@ function App() {
 
     const view = new EditorView(editorRef.current, {
       state,
+      transformPasted(slice) {
+        const humanMark = schema.marks.human_highlight.create();
+        const addMark = (fragment: Fragment): Fragment => {
+          const nodes: ProseMirrorNode[] = [];
+          fragment.forEach((node) => {
+            if (node.isText) {
+              nodes.push(node.mark([humanMark]));
+            } else {
+              nodes.push(node.copy(addMark(node.content)));
+            }
+          });
+          return Fragment.from(nodes);
+        };
+        return new Slice(addMark(slice.content), slice.openStart, slice.openEnd);
+      },
       dispatchTransaction(transaction) {
         if (editorViewRef.current === null) {
           return;
@@ -1231,7 +1280,7 @@ function App() {
                   <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: agentCollapsed.activity ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                 </button>
                 {!agentCollapsed.activity && (
-                  <div className="px-3 pb-3 overflow-y-auto text-xs space-y-1 max-h-[300px]">
+                  <div className="px-3 pb-3 overflow-y-auto text-xs space-y-1" style={{maxHeight: "300px"}}>
                     {agentActivity.map((entry, i) => (
                       <div key={i} className="flex">
                         <span className="text-gray-500 flex-none w-20">{new Date(entry.ts).toLocaleTimeString()}</span>
@@ -1337,7 +1386,7 @@ function App() {
                   <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400" style={{width: "12px", height: "12px", flexShrink: 0, transform: envCollapsed.activity ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
                 </button>
                 {!envCollapsed.activity && (
-                  <div className="px-3 pb-3 overflow-y-auto text-xs space-y-1 max-h-[300px]">
+                  <div className="px-3 pb-3 overflow-y-auto text-xs space-y-1" style={{maxHeight: "300px"}}>
                     {envActivity.map((entry, i) => (
                       <div key={i} className="flex">
                         <span className="text-gray-500 flex-none w-20">{new Date(entry.ts).toLocaleTimeString()}</span>
@@ -1395,6 +1444,36 @@ function App() {
           </button>
           {generatingLoopOn && <span className="text-xs text-green-400">Loop running</span>}
           <span className="text-xs text-gray-400 ml-3">{navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Enter generate | {navigator.platform?.includes("Mac") ? "Option" : "Alt"}+Enter trigger action</span>
+          {actionStatus && (
+            <span className="flex items-center space-x-1.5 ml-3 text-xs">
+              {actionStatus.status === "sent" && (
+                <>
+                  <span className="inline-block rounded-full animate-pulse" style={{width: "8px", height: "8px", flexShrink: 0, backgroundColor: "#b87df9"}} />
+                  <span className="text-[#b87df9]">Action sent</span>
+                </>
+              )}
+              {actionStatus.status === "processing" && (
+                <>
+                  <svg className="animate-spin" style={{width: "12px", height: "12px", flexShrink: 0}} viewBox="0 0 24 24">
+                    <circle opacity="0.25" cx="12" cy="12" r="10" stroke="#b87df9" strokeWidth="4" fill="none" />
+                    <path opacity="0.75" fill="#b87df9" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span className="text-[#b87df9]">Environment processing...</span>
+                </>
+              )}
+              {actionStatus.status === "complete" && (
+                <>
+                  <svg style={{width: "12px", height: "12px", flexShrink: 0}} viewBox="0 0 20 20" fill="#22c55e">
+                    <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                  </svg>
+                  <span className="text-green-500">Action complete</span>
+                </>
+              )}
+              <span className="text-gray-600 truncate" style={{ maxWidth: "150px" }}>
+                {actionStatus.action}
+              </span>
+            </span>
+          )}
         </div>
         <div className="flex items-center text-xs text-gray-500">
           <span>{modelSelection} | t={modelTemperature}</span>

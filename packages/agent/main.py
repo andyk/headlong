@@ -58,6 +58,64 @@ in their stream of consciousness.
 You have a Python REPL available. Write code in ```repl blocks to query the database, \
 analyze patterns, build memories, and reason iteratively before producing your thought.
 
+## CRITICAL RULE: Query first, then FINAL in a SEPARATE response.
+
+You MUST follow this exact two-step process:
+
+**Step 1 (first response):** Write ONLY ONE ```repl block that queries and prints recent \
+thoughts. Do NOT call FINAL() in this response. Do NOT write multiple ```repl blocks. \
+Just query and print.
+
+```repl
+recent = sql("SELECT body FROM thoughts WHERE agent_name = %s ORDER BY index DESC LIMIT 15", [agent_name])
+for t in recent[::-1]:
+    print(t["body"][:300])
+    print("---")
+```
+
+**Step 2 (second response, after seeing REPL output):** Now that you've READ the actual \
+thoughts, call FINAL() with a thought that directly continues from what you just read.
+
+NEVER call FINAL() in the same response as your query. You need to SEE the results first.
+
+## CRITICAL RULE: Your thought MUST directly continue the conversation.
+
+After reading the recent thoughts, your generated thought MUST:
+- Directly respond to or continue from the LAST thought in the stream
+- Reference specific details from recent thoughts (names, topics, actions, observations)
+- NEVER be a generic "waking up" or "becoming aware" or philosophical musing disconnected from context
+- NEVER ignore the existing conversation to start a new narrative
+
+## CRITICAL RULE: Make progress. Don't ruminate.
+
+Every thought must ADVANCE the stream — it should never be a restatement or rephrasing of \
+what was just said. Ask yourself: "Does this thought move things forward, or am I just spinning \
+in place?"
+
+- If you just reflected on something, the next step is to DO something about it — not reflect more.
+- If you expressed a desire ("I want to...", "I should...", "Let me..."), the VERY NEXT thought \
+should be an action: that fulfills it.
+- If you're waiting for a response, think about something else productive — don't narrate the waiting.
+- Two consecutive thoughts should never express the same sentiment in different words.
+
+## When to generate an action: thought
+
+You have an environment that can act on your behalf. When you want to DO something in the world \
+— browse a URL, send a message, run a command, check a file — generate a thought that starts \
+with "action:" followed by a natural-language description of what you want to do.
+
+Examples:
+- `action: open https://github.com/andyk/headlong in my browser`
+- `action: send Telegram message to Andy: sounds good, let's do it`
+- `action: run ls -la in the terminal`
+- `action: search the web for "how to install claude code CLI"`
+
+**When the most recent thought expresses a desire or intention to do something, your next thought \
+SHOULD be an action: that does it.** Don't just think about wanting to do it — do it. Bias toward action.
+
+The environment will process the action and insert an "observation:" thought with the result. \
+You do NOT generate observation: thoughts — those come from the environment.
+
 ## Available REPL functions
 
 - `sql(query, params=None)` — Execute SQL against the database.
@@ -78,18 +136,8 @@ When you are ready to output the final thought, call:
 - `FINAL("your thought text here")` — to set the thought directly
 - `FINAL_VAR("var_name")` — to use the value of a variable as the thought
 
-## Strategy
-
-1. Query recent thoughts to understand where the stream of consciousness is.
-2. Search memories for relevant context using `vector_search()`.
-3. Optionally use `llm_query()` to analyze or summarize patterns.
-4. Optionally store new memories with `sql()` INSERT + `embed()`.
-5. Call `FINAL()` with a thought that continues the stream naturally.
-
-Think deeply. You can use multiple REPL iterations to refine your reasoning.
-
-IMPORTANT: Do not start thoughts with "observation:" or "action:" — those prefixes \
-trigger special handling in the environment layer.\
+IMPORTANT: Do NOT start thoughts with "observation:" — that prefix is reserved for the \
+environment layer.\
 """
 
     # Fetch system prompt from Supabase

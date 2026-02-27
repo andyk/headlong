@@ -12,6 +12,7 @@ import threading
 
 import uvicorn
 from dotenv import load_dotenv
+from openai import OpenAI
 
 # Load .env from project root
 load_dotenv(dotenv_path="../../.env")
@@ -37,6 +38,27 @@ logging.getLogger("realtime._async.channel").setLevel(logging.INFO)
 log = logging.getLogger(__name__)
 
 NUM_THOUGHTS_TO_CONSIDER = 20
+MIN_BODY_LENGTH_FOR_EMBEDDING = 10
+
+
+async def embed_thought(thought: dict) -> None:
+    """Generate and store an embedding for a thought."""
+    thought_id = thought.get("id")
+    body = thought.get("body", "")
+    if not thought_id or len(body.strip()) < MIN_BODY_LENGTH_FOR_EMBEDDING:
+        return
+    try:
+        oai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        response = oai.embeddings.create(
+            model="text-embedding-3-small",
+            input=body,
+        )
+        vector = response.data[0].embedding
+        supabase_client.update_thought_embedding(thought_id, vector)
+        log.info("embedded thought %s (%d chars)", thought_id, len(body))
+        log_activity(f"Embedded thought {thought_id[:8]}... ({len(body)} chars)")
+    except Exception as e:
+        log.warning("failed to embed thought %s: %s", thought_id, e)
 
 
 async def handle_thought(thought: dict, agent_name: str) -> None:
@@ -77,6 +99,15 @@ async def handle_thought(thought: dict, agent_name: str) -> None:
     # Get tool schemas and descriptions
     tool_schemas = tools.get_claude_tool_schemas()
     tool_descriptions = tools.get_tool_descriptions()
+
+    # Re-fetch env system prompt in case it was edited
+    try:
+        env_config = supabase_client.get_environment_config(agent_name)
+        env_prompt = env_config.get("system_prompt", "")
+        if env_prompt:
+            llm.set_env_system_prompt(env_prompt)
+    except Exception:
+        pass
 
     # Call Claude
     log_activity(f"Calling Claude with {len(thoughts)} thoughts, {len(tool_schemas)} tools")
@@ -122,6 +153,21 @@ async def main():
     log.info("starting headlong env daemon for agent: %s", agent_name)
     set_agent_name(agent_name)
 
+    # Fetch env system prompt from Supabase
+    try:
+        env_config = supabase_client.get_environment_config(agent_name)
+        env_prompt = env_config.get("system_prompt", "")
+        if env_prompt:
+            llm.set_env_system_prompt(env_prompt)
+            log.info("loaded env system prompt from Supabase (%d chars)", len(env_prompt))
+            log_activity(f"Loaded env system prompt ({len(env_prompt)} chars)")
+        else:
+            log.warning("no env system prompt in DB, using default")
+            log_activity("Using default env system prompt")
+    except Exception as e:
+        log.warning("failed to fetch env config: %s (using default)", e)
+        log_activity(f"Env config fetch failed: {e} (using default)")
+
     # Initialize tools
     tools.register_all()
     log_activity(f"Environment started for agent: {agent_name}")
@@ -136,6 +182,9 @@ async def main():
     def on_thought(thought: dict):
         loop.call_soon_threadsafe(
             asyncio.ensure_future, handle_thought(thought, agent_name)
+        )
+        loop.call_soon_threadsafe(
+            asyncio.ensure_future, embed_thought(thought)
         )
 
     channel = await supabase_client.subscribe_to_thoughts(on_thought)
