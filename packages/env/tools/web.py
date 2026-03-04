@@ -1,14 +1,15 @@
 """URL fetching via Playwright headless Chromium browser."""
 
 import logging
+from typing import Optional
 from playwright.async_api import async_playwright, Browser, BrowserContext
 
 log = logging.getLogger(__name__)
 
 # Persistent browser instance — launched on first use, reused across requests.
 _playwright = None
-_browser: Browser | None = None
-_context: BrowserContext | None = None
+_browser: Optional[Browser] = None
+_context: Optional[BrowserContext] = None
 
 
 async def _get_context() -> BrowserContext:

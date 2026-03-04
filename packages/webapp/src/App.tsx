@@ -733,7 +733,7 @@ function App() {
         );
 
         if (thoughtNode) {
-          tr.insert(insertPos, thoughtNode).scrollIntoView();
+          tr.insert(insertPos, thoughtNode);
 
           // Persist the highlight marks to the database so other clients see them on load
           const markType = isObservation ? "observation_highlight" : "highlight";
@@ -837,10 +837,15 @@ function App() {
       }
 
       if (tr.docChanged) {
-        editorViewRef.current.updateState(state.apply(tr));
-        // updateState doesn't trigger scrollIntoView, so scroll manually
+        // Only auto-scroll if user is already near the bottom
         const scrollParent = editorViewRef.current.dom.parentElement?.parentElement;
-        if (scrollParent) {
+        const isNearBottom = scrollParent
+          ? (scrollParent.scrollHeight - scrollParent.scrollTop - scrollParent.clientHeight) < 150
+          : false;
+
+        editorViewRef.current.updateState(state.apply(tr));
+
+        if (isNearBottom && scrollParent) {
           scrollParent.scrollTo({ top: scrollParent.scrollHeight, behavior: "smooth" });
         }
       }
@@ -1406,7 +1411,7 @@ function App() {
       <div className="flex justify-between items-center p-2 border-t border-slate-200 dark:border-[#333]">
         <div className="flex items-center space-x-2">
           <button
-            className={`${isGenerating ? "bg-gray-500" : "bg-blue-500"} text-white py-2 px-4 rounded-md`}
+            className={`${isGenerating ? "bg-gray-500" : "bg-blue-500"} text-white py-2 px-4 rounded`}
             onClick={() => generateThought()}
             disabled={isGenerating}
           >
@@ -1414,10 +1419,11 @@ function App() {
           </button>
           <button
             className={generatingLoopOn ? (
-              "bg-red-500 text-white py-2 px-4 rounded mx-2"
+              "bg-red-500 text-white px-3 rounded mx-2"
             ) : (
-              "bg-blue-500 text-white py-2 px-4 rounded mx-2"
+              "bg-blue-500 text-white px-3 rounded mx-2"
             )}
+            style={{height: "40px"}}
             onClick={async () => {
               if (generatingLoopOn) {
                 await stopLoop();
