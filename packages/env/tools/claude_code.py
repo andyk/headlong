@@ -3,6 +3,10 @@
 Lets the agent delegate coding tasks to Claude Code without trying to
 drive the interactive TUI through tmux keystrokes.  Uses `claude -p`
 (pipe mode) which reads a prompt, does the work, and prints the result.
+
+Session persistence: the session ID from the first call is stored and
+reused on subsequent calls via `--resume`, so Claude Code retains its
+conversation history across action thoughts.
 """
 
 import asyncio
@@ -15,12 +19,18 @@ log = logging.getLogger(__name__)
 # Timeout for a single Claude Code run (10 minutes)
 CLAUDE_CODE_TIMEOUT = 600
 
+# Persistent session ID — set after the first successful run
+_session_id: str | None = None
+
 
 async def run_claude_code(args: dict) -> str:
     """Run Claude Code in pipe mode on a task."""
+    global _session_id
+
     prompt = args.get("prompt", "")
     workdir = args.get("workdir", "/app/headlong")
     dangerously_skip_permissions = args.get("dangerouslySkipPermissions", True)
+    new_session = args.get("newSession", False)
 
     if not prompt:
         return "observation: claude_code error — prompt is required"
@@ -33,6 +43,13 @@ async def run_claude_code(args: dict) -> str:
     cmd = [claude_bin, "-p", "--output-format", "json"]
     if dangerously_skip_permissions:
         cmd.append("--dangerously-skip-permissions")
+
+    # Resume previous session if we have one (unless explicitly starting fresh)
+    if new_session:
+        _session_id = None
+    if _session_id:
+        cmd.extend(["--resume", _session_id])
+        log.info("resuming claude code session %s", _session_id)
 
     log.info("running claude code in %s: %s", workdir, prompt[:120])
 
@@ -63,28 +80,32 @@ async def run_claude_code(args: dict) -> str:
             f"stdout: {stdout_text[:2000]}"
         )
 
-    # Parse JSON output — extract the result text
-    result_text = _extract_result(stdout_text)
+    # Parse JSON output — extract result and session ID
+    result_text, session_id = _extract_result(stdout_text)
+
+    # Store session ID for next call
+    if session_id:
+        _session_id = session_id
+        log.info("claude_code session_id: %s", _session_id)
 
     log.info("claude_code finished (%d chars output)", len(result_text))
     return f"observation: claude_code result:\n{result_text}"
 
 
-def _extract_result(raw: str) -> str:
-    """Extract human-readable result from Claude Code JSON output.
+def _extract_result(raw: str) -> tuple[str, str | None]:
+    """Extract human-readable result and session ID from Claude Code JSON output.
 
-    Claude Code --output-format json returns a JSON object with a `result`
-    field containing the final response text.  Fall back to raw output if
-    parsing fails.
+    Returns (result_text, session_id).
     """
     try:
         data = json.loads(raw)
-        # Claude Code JSON format: {"type": "result", "result": "...", ...}
-        if isinstance(data, dict) and "result" in data:
-            return data["result"]
-        return raw
+        if isinstance(data, dict):
+            result = data.get("result", raw)
+            session_id = data.get("session_id")
+            return result, session_id
+        return raw, None
     except (json.JSONDecodeError, TypeError):
-        return raw
+        return raw, None
 
 
 TOOL = {
@@ -96,7 +117,9 @@ TOOL = {
         "debugging, code review, exploring/understanding a codebase, or "
         "any task that requires reading and writing files. "
         "Do NOT use this for simple one-line observations — only for "
-        "tasks that benefit from an AI coding agent with full file access."
+        "tasks that benefit from an AI coding agent with full file access. "
+        "Sessions persist across calls — Claude Code remembers previous "
+        "work. Set newSession=true to start fresh."
     ),
     "parameters": {
         "type": "object",
@@ -118,6 +141,14 @@ TOOL = {
                     "/app/headlong (the repo root inside Docker)."
                 ),
                 "default": "/app/headlong",
+            },
+            "newSession": {
+                "type": "boolean",
+                "description": (
+                    "Start a new Claude Code session instead of continuing "
+                    "the previous one. Use when switching to an unrelated task."
+                ),
+                "default": False,
             },
         },
         "required": ["prompt"],
