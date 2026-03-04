@@ -48,6 +48,9 @@ async def embed_thought(thought: dict) -> None:
     body = thought.get("body", "")
     if not thought_id or len(body.strip()) < MIN_BODY_LENGTH_FOR_EMBEDDING:
         return
+    if thought_id in _embedded_ids:
+        return
+    _embedded_ids.add(thought_id)
     try:
         oai = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
         response = oai.embeddings.create(
@@ -63,6 +66,7 @@ async def embed_thought(thought: dict) -> None:
 
 
 _handled_ids: set[str] = set()
+_embedded_ids: set[str] = set()
 
 async def handle_thought(thought: dict, agent_name: str) -> None:
     """Handle an incoming thought that needs action."""

@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import shutil
+from typing import Optional, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ log = logging.getLogger(__name__)
 CLAUDE_CODE_TIMEOUT = 600
 
 # Persistent session ID — set after the first successful run
-_session_id: str | None = None
+_session_id: Optional[str] = None
 
 
 async def run_claude_code(args: dict) -> str:
@@ -92,7 +93,7 @@ async def run_claude_code(args: dict) -> str:
     return f"observation: claude_code result:\n{result_text}"
 
 
-def _extract_result(raw: str) -> tuple[str, str | None]:
+def _extract_result(raw: str) -> Tuple[str, Optional[str]]:
     """Extract human-readable result and session ID from Claude Code JSON output.
 
     Returns (result_text, session_id).
