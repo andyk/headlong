@@ -47,6 +47,17 @@ The agent daemon also needs a direct Postgres connection for the REPL's `sql()` 
 SUPABASE_DB_URL_HEADLONG=postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
 ```
 
+## Install via Claude Code, Codex, etc.
+
+If you have an AI coding agent like [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex, you can paste the following prompt to have it set up Headlong for you:
+
+> Clone https://github.com/bobbywilder/headlong and follow the README to set it up. I have already created a Supabase project and run the migrations. My Supabase credentials and API keys are in my `.env` file at the project root. Set up the Python virtual environments, install dependencies (including Playwright), and install the webapp's npm packages.
+
+**Before running this, you must:**
+1. Create a [Supabase](https://supabase.com) project
+2. Run the SQL migrations in `migrations/` via the Supabase SQL Editor (see Prerequisites above)
+3. Create a `.env` file with your credentials (see Environment variables above)
+
 ## Setup on macOS
 
 ### System dependencies
@@ -230,8 +241,7 @@ headlong
 │   │       ├── __init__.py   # Tool registry
 │   │       ├── web.py        # searchGoogle, visitURL
 │   │       ├── terminal.py   # tmux-based terminal tools
-│   │       ├── telegram.py   # sendMessage + listener
-│   │       └── claude_code.py # Claude Code headless pipe mode
+│   │       └── telegram.py   # sendMessage + listener
 │   └── webapp/               # Web frontend (Vite + React + TypeScript)
 │       ├── src/App.tsx        # Main app with ProseMirror editor
 │       └── package.json

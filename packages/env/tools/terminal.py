@@ -117,8 +117,35 @@ async def type_keys(args: dict) -> str:
     keys = args.get("keys", "")
     window = session.active_window
     pane = window.active_pane
-    pane.send_keys(keys, enter=False)
-    return f"observation: typed keys into window '{window.window_name}'"
+
+    # tmux send-keys treats certain names as special keys (Enter, Escape,
+    # Up, Down, Left, Right, Tab, BSpace, etc.).  Use send_keys with
+    # literal=False so tmux interprets them.  For plain text that should
+    # NOT be interpreted as key names, we use literal=True.
+    #
+    # Heuristic: if the entire string is a known tmux key name (or a
+    # short modifier combo like C-c), send it as a tmux key.  Otherwise
+    # send it as literal text followed by Enter.
+    TMUX_SPECIAL_KEYS = {
+        "enter", "return", "escape", "tab", "btab", "bspace",
+        "up", "down", "left", "right",
+        "home", "end", "pageup", "pagedown", "ppage", "npage",
+        "space", "dc",  # delete char
+    }
+
+    stripped = keys.strip()
+    # Check for tmux key names (case-insensitive) or modifier combos like C-c, M-x
+    is_special = (
+        stripped.lower() in TMUX_SPECIAL_KEYS
+        or (len(stripped) <= 5 and stripped[:2] in ("C-", "M-"))
+    )
+
+    if is_special:
+        pane.cmd("send-keys", stripped)
+    else:
+        pane.send_keys(stripped, enter=True)
+
+    return f"observation: typed into window '{window.window_name}': {keys}"
 
 
 # Individual tool definitions

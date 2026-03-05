@@ -132,7 +132,7 @@ async def subscribe_to_thoughts(callback: Callable):
     sb = await get_async_client()
 
     def on_change(payload):
-        log.debug("realtime payload type=%s", type(payload).__name__)
+        log.info("realtime RAW payload: %s", payload)
         # Extract the record from the realtime payload.
         # The supabase-py SDK passes the callback a dict like:
         #   {"data": {"record": {...}, "type": "INSERT"|"UPDATE", ...}, "ids": [...]}

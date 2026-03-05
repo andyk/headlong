@@ -47,7 +47,13 @@ def build_system_prompt(tool_descriptions: list[str]) -> str:
         "The way you take action is by calling one of the available tools with appropriate arguments.\n"
         "If you don't think any tool is appropriate for this action, respond with text starting with "
         "\"observation: \" explaining what you observe or that you don't know how to do that.\n"
-        "When deciding what action to take, use the following stream of recent thoughts for context."
+        "When deciding what action to take, use the following stream of recent thoughts for context.\n\n"
+        "For coding tasks, use Claude Code via the terminal tools:\n"
+        "1. executeWindowCommand to run 'claude --dangerously-skip-permissions' in a terminal window\n"
+        "2. lookAtActiveWindow to see what Claude Code is doing\n"
+        "3. typeWithKeyboard to send prompts, respond to questions, or provide input\n"
+        "You can create a dedicated window with newWindow first, then interact with Claude Code "
+        "just like a human would at a terminal."
     )
     return f"""{base}
 
