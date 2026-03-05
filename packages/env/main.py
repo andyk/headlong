@@ -79,6 +79,13 @@ async def handle_thought(thought: dict, agent_name: str) -> None:
         and isinstance(metadata, dict)
         and metadata.get("needs_handling") is True
     ):
+        log.debug(
+            "skipping thought: starts_with_action=%s, metadata_type=%s, needs_handling=%s, body=%s...",
+            body.lower().startswith("action: "),
+            type(metadata).__name__,
+            metadata.get("needs_handling") if isinstance(metadata, dict) else "N/A",
+            body[:80],
+        )
         return
 
     thought_id = thought.get("id")

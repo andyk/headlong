@@ -18,7 +18,7 @@ import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
 
-const models: string[] = await getModels();
+const models: string[] = await getModels().catch(() => []);
 
 type Thought = Database["public"]["Tables"]["thoughts"]["Row"];
 
@@ -251,6 +251,14 @@ function App() {
         const metadataAttr = { ...node.attrs.metadata, needs_handling: true };
         const transaction = state.tr.setNodeAttribute(currentThoughtPos, "metadata", metadataAttr);
         dispatch(transaction);
+
+        // Explicitly mark this thought as dirty so pushToDB fires.
+        // setNodeAttribute doesn't set transaction.docChanged, so
+        // dispatchTransaction won't pick it up automatically.
+        const thoughtId = node.attrs.id;
+        if (thoughtId) {
+          setThoughtIdsToUpdate((prev) => new Set(prev).add(thoughtId));
+        }
 
         const text = node.textContent.trim();
         setActionStatus({ status: "sent", action: text.slice(0, 50) });
@@ -1140,8 +1148,8 @@ function App() {
   generateThoughtRef.current = generateThought;
 
   return (
-    <div className="App flex flex-col h-screen max-h-screen">
-      <div className="w-screen flex bg-gray-100 dark:bg-[#1a1a1a] border-b border-gray-200 dark:border-[#333] dark:border-[#333]">
+    <div className="App flex flex-col h-screen max-h-screen overflow-x-hidden">
+      <div className="w-full flex bg-gray-100 dark:bg-[#1a1a1a] border-b border-gray-200 dark:border-[#333] dark:border-[#333]">
         <svg xmlns="http://www.w3.org/2000/svg" width="61" height="49.5" viewBox="0 0 61 49.5" className="flex-none">
           <rect x="8" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
           <rect x="23" y="8" width="9" height="34.5" style={{ fill: "#b87df9" }} />
@@ -1150,7 +1158,12 @@ function App() {
         <div className="flex-grow flex justify-end space-x-1">
           <button
             className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-200 dark:hover:bg-[#2a2a2a]"
-            onClick={() => setAgentPaneOpen(prev => !prev)}
+            onClick={() => {
+              const scrollEl = editorRef.current?.parentElement;
+              const scrollTop = scrollEl?.scrollTop ?? 0;
+              setAgentPaneOpen(prev => !prev);
+              requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = scrollTop; });
+            }}
           >
             {agentStatus === "attached" ? (
               <>
@@ -1171,7 +1184,12 @@ function App() {
           </button>
           <button
             className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-200 dark:hover:bg-[#2a2a2a]"
-            onClick={() => setEnvPaneOpen(prev => !prev)}
+            onClick={() => {
+              const scrollEl = editorRef.current?.parentElement;
+              const scrollTop = scrollEl?.scrollTop ?? 0;
+              setEnvPaneOpen(prev => !prev);
+              requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = scrollTop; });
+            }}
           >
             {envStatus === "attached" ? (
               <>
