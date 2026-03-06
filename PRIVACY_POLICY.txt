@@ -1,0 +1,20 @@
+Privacy Policy
+Last updated: March 6, 2026
+
+Headlong does not collect, store, or process any personal data from users.
+
+Data Collection
+We do not collect any personal information, usage data, analytics, cookies, or tracking information of any kind.
+
+SMS Messaging
+Our application uses Twilio to send and receive SMS messages. SMS messages are transmitted solely for the purpose of delivering the requested communication. Message content is not stored, logged, analyzed, or retained beyond what is necessary for immediate delivery.
+
+Data Sharing
+We do not share any information with third parties. No data is sold, rented, licensed, or disclosed to any external party for any purpose, including marketing.
+
+Marketing
+We do not use any information for marketing purposes. Users will never receive unsolicited marketing communications from us.
+
+Contact
+If you have questions about this privacy policy, you can reach us by opening an issue at:
+https://github.com/bobbyhwilder/headlong_gandolf_overmind/issues
