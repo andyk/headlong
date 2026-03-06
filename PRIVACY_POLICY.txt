@@ -17,4 +17,4 @@ We do not use any information for marketing purposes. Users will never receive u
 
 Contact
 If you have questions about this privacy policy, you can reach us by opening an issue at:
-https://github.com/bobbyhwilder/headlong_gandolf_overmind/issues
+https://github.com/andyk/headlong/issues
