@@ -5,20 +5,19 @@ Program Name
 Headlong SMS Notifications
 
 Program Description
-Headlong uses SMS messaging to enable communication between users and an AI agent. Messages are sent and received in response to user-initiated interactions.
+Headlong is an OSS project that allows users to set up SMS messaging via Twilio to enable communication between users and an AI agent. Messages are sent and received in response to user-initiated interactions.
 
 Message Frequency
-Message frequency varies based on user interaction. You will only receive messages in direct response to your communications with the system.
+Message frequency varies based on user interaction and the version of Headlong they are running. Users only receive messages when they set up SMS communications with the agents they create.
 
 Message and Data Rates
 Message and data rates may apply. Please contact your wireless carrier for details about your messaging plan.
 
 Support
-For support, text **HELP** to our messaging number or open an issue at:
-https://github.com/andyk/headlong/issues
+For support, open an issue at: https://github.com/andyk/headlong/issues
 
 Opt-Out
-To stop receiving messages, text **STOP** to our messaging number at any time. You will receive a confirmation message and no further messages will be sent.
+To stop receiving messages, stop your agent or delete your Twilio number.
 
 Privacy
 We do not collect, store, or share any personal data. See our full privacy policy at:
