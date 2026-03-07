@@ -7,6 +7,7 @@ from tools.search import TOOL as search_tool
 from tools.web import TOOL as web_tool
 from tools.terminal import TOOL as terminal_tool, TOOLS as terminal_tools
 from tools.telegram import TOOL as telegram_tool
+from tools.sms import TOOL as sms_tool
 from tools.time_tool import TOOL as time_tool
 
 
@@ -28,6 +29,7 @@ def register_all() -> None:
     for t in terminal_tools:
         register_tool(t)
     register_tool(telegram_tool)
+    register_tool(sms_tool)
     register_tool(time_tool)
 
     log.info("registered tools: %s", list(TOOLS.keys()))

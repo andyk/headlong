@@ -22,6 +22,7 @@ import supabase_client
 import llm
 import tools
 from tools.telegram import start_listener as start_telegram_listener, stop_listener as stop_telegram_listener
+from tools.sms import register_webhook as register_sms_webhook
 from thought_api import app as fastapi_app, set_agent_name, log_activity
 
 logging.basicConfig(
@@ -33,6 +34,8 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("hpack").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.INFO)
+logging.getLogger("twilio").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.INFO)
 logging.getLogger("realtime._async.client").setLevel(logging.INFO)
 logging.getLogger("realtime._async.channel").setLevel(logging.INFO)
@@ -229,6 +232,14 @@ async def main():
         await supabase_client.add_thought(agent_name, text)
 
     await start_telegram_listener(on_telegram_message)
+
+    # Register SMS webhook — incoming messages become thoughts
+    async def on_sms_message(from_number: str, text: str):
+        log.info("sms -> thought: %s", text[:100])
+        log_activity(f"SMS from {from_number}: {text[:120]}")
+        await supabase_client.add_thought(agent_name, text)
+
+    register_sms_webhook(fastapi_app, on_sms_message)
 
     log.info("env daemon running. Listening for thoughts...")
     log.info("registered tools: %s", list(tools.TOOLS.keys()))

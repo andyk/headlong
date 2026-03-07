@@ -12,3 +12,4 @@ uvicorn>=0.34.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
 openai>=1.0.0
+twilio>=9.0.0
