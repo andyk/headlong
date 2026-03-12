@@ -78,7 +78,7 @@ async def stop_listener():
 
 
 TOOL = {
-    "name": "sendMessage",
+    "name": "send_telegram_message",
     "description": "Send a message via Telegram.",
     "parameters": {
         "type": "object",

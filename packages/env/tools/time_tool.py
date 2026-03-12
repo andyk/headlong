@@ -22,7 +22,7 @@ async def execute(args: dict) -> str:
 
 
 TOOL = {
-    "name": "checkTime",
+    "name": "check_time",
     "description": "See what time it is, could be looking at a watch or a clock.",
     "parameters": {
         "type": "object",

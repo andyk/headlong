@@ -1,5 +1,6 @@
-"""Terminal management via tmux (replaces terminalServer + ht binary)."""
+"""Terminal access via tmux — single bash window."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -40,101 +41,49 @@ def get_session() -> libtmux.Session:
     return _session
 
 
-async def new_window(args: dict) -> str:
-    """Create a new tmux window."""
-    session = get_session()
-    window_id = args.get("windowID", "default")
-    shell_path = args.get("shellPath", "/bin/bash")
-
-    window = session.new_window(
-        window_name=window_id,
-        window_shell=shell_path,
-    )
-    log.info("created new window: %s", window_id)
-    return f"observation: created new terminal window '{window_id}'"
-
-
-async def switch_to_window(args: dict) -> str:
-    """Switch to a specific tmux window."""
-    session = get_session()
-    window_id = args.get("id", "")
-
-    for window in session.windows:
-        if window.window_name == window_id:
-            window.select()
-            return f"observation: switched to window '{window_id}'"
-
-    return f"observation: window '{window_id}' not found"
-
-
-async def run_command(args: dict) -> str:
-    """Run a command in the active tmux window."""
+async def bash_command(args: dict) -> str:
+    """Run a command in the active bash window."""
     session = get_session()
     command = args.get("command", "")
 
-    window = session.active_window
-    pane = window.active_pane
+    pane = session.active_window.active_pane
     pane.send_keys(command, enter=True)
-    log.info("ran command in window '%s': %s", window.window_name, command)
+    log.info("bash_command: %s", command)
 
-    # Brief wait then capture output
-    import asyncio
     await asyncio.sleep(1)
 
     output = pane.capture_pane()
     output_text = "\n".join(output) if isinstance(output, list) else str(output)
-    return f"observation: ran command '{command}' in window '{window.window_name}':\n{output_text}"
+    return f"observation: ran '{command}':\n{output_text}"
 
 
-async def look_at_window(args: dict) -> str:
-    """Capture the contents of the active tmux window."""
+async def look_at_bash(args: dict) -> str:
+    """Look at the contents of the active bash window."""
     session = get_session()
-    window = session.active_window
-    pane = window.active_pane
+    pane = session.active_window.active_pane
 
     output = pane.capture_pane()
     output_text = "\n".join(output) if isinstance(output, list) else str(output)
-    return f"observation: contents of window '{window.window_name}':\n{output_text}"
+    return f"observation: bash window contents:\n{output_text}"
 
 
-async def list_windows(args: dict) -> str:
-    """List all tmux windows."""
-    session = get_session()
-    window_names = [w.window_name for w in session.windows]
-    return f"observation: open windows: {', '.join(window_names)}"
-
-
-async def which_window_active(args: dict) -> str:
-    """Get the active window name."""
-    session = get_session()
-    window = session.active_window
-    return f"observation: active window is '{window.window_name}'"
-
-
-async def type_keys(args: dict) -> str:
-    """Send arbitrary keystrokes to the active window."""
+async def type_in_bash(args: dict) -> str:
+    """Type at the keyboard into the active bash window."""
     session = get_session()
     keys = args.get("keys", "")
-    window = session.active_window
-    pane = window.active_pane
+    pane = session.active_window.active_pane
 
     # tmux send-keys treats certain names as special keys (Enter, Escape,
-    # Up, Down, Left, Right, Tab, BSpace, etc.).  Use send_keys with
-    # literal=False so tmux interprets them.  For plain text that should
-    # NOT be interpreted as key names, we use literal=True.
-    #
-    # Heuristic: if the entire string is a known tmux key name (or a
-    # short modifier combo like C-c), send it as a tmux key.  Otherwise
-    # send it as literal text followed by Enter.
+    # Up, Down, C-c, etc.).  If the string looks like a tmux key name or
+    # modifier combo, send it as a key; otherwise send as literal text.
     TMUX_SPECIAL_KEYS = {
         "enter", "return", "escape", "tab", "btab", "bspace",
         "up", "down", "left", "right",
         "home", "end", "pageup", "pagedown", "ppage", "npage",
-        "space", "dc",  # delete char
+        "space", "dc",
     }
 
     stripped = keys.strip()
-    # Check for tmux key names (case-insensitive) or modifier combos like C-c, M-x
     is_special = (
         stripped.lower() in TMUX_SPECIAL_KEYS
         or (len(stripped) <= 5 and stripped[:2] in ("C-", "M-"))
@@ -143,104 +92,55 @@ async def type_keys(args: dict) -> str:
     if is_special:
         pane.cmd("send-keys", stripped)
     else:
-        pane.send_keys(stripped, enter=True)
+        pane.send_keys(stripped, enter=False)
 
-    return f"observation: typed into window '{window.window_name}': {keys}"
+    await asyncio.sleep(0.1)
+
+    output = pane.capture_pane()
+    output_text = "\n".join(output) if isinstance(output, list) else str(output)
+    return f"observation: typed '{keys}' in bash. bash window now shows:\n{output_text}"
 
 
-# Individual tool definitions
 TOOLS = [
     {
-        "name": "newWindow",
-        "description": "Create a new terminal window.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "shellPath": {
-                    "type": "string",
-                    "description": "Path of shell binary to open, e.g. /bin/bash",
-                },
-                "windowID": {
-                    "type": "string",
-                    "description": "Unique ID for the new window",
-                },
-            },
-        },
-        "execute": new_window,
-    },
-    {
-        "name": "switchToWindow",
-        "description": "Switch to the specified window, i.e. 'bring it to the front'.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The ID of the window to switch to",
-                },
-            },
-            "required": ["id"],
-        },
-        "execute": switch_to_window,
-    },
-    {
-        "name": "executeWindowCommand",
-        "description": "Run a command in the currently active terminal window.",
+        "name": "bash_command",
+        "description": "Run a command in the currently active bash window.",
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The command to execute in the active window",
+                    "description": "The command to execute",
                 },
             },
             "required": ["command"],
         },
-        "execute": run_command,
+        "execute": bash_command,
     },
     {
-        "name": "lookAtActiveWindow",
-        "description": "Look at the contents of the currently active terminal window.",
+        "name": "look_at_bash",
+        "description": "Look at the contents of the currently active bash window.",
         "parameters": {
             "type": "object",
             "properties": {},
         },
-        "execute": look_at_window,
+        "execute": look_at_bash,
     },
     {
-        "name": "listWindows",
-        "description": "List the IDs of all currently open terminal windows.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-        },
-        "execute": list_windows,
-    },
-    {
-        "name": "whichWindowActive",
-        "description": "Get the ID of the currently active terminal window.",
-        "parameters": {
-            "type": "object",
-            "properties": {},
-        },
-        "execute": which_window_active,
-    },
-    {
-        "name": "typeWithKeyboard",
-        "description": "Type at the keyboard into the active terminal window.",
+        "name": "type_in_bash_with_keyboard",
+        "description": "Type at the keyboard into the active bash window. Use tmux syntax for special keys (e.g. Enter, Escape, C-c, Up, Down, Tab).",
         "parameters": {
             "type": "object",
             "properties": {
                 "keys": {
                     "type": "string",
-                    "description": "Description of what to type into the active window",
+                    "description": "What to type. Use tmux key names for special keys (Enter, Escape, C-c, Up, Down, Tab, BSpace, etc.)",
                 },
             },
             "required": ["keys"],
         },
-        "execute": type_keys,
+        "execute": type_in_bash,
     },
 ]
 
-# For backwards compat in the registry
 TOOL = TOOLS[0]

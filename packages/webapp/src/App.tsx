@@ -866,6 +866,8 @@ function App() {
         console.debug("Change received!", payload);
         // call updateEditorFromSupabase with the payload if payload.new.agent_name === selectedAgentName
         if ("agent_name" in payload.new && payload.new.agent_name === selectedAgentName) {
+          // Skip heartbeat probes from the env daemon
+          if ("body" in payload.new && payload.new.body?.startsWith("__heartbeat_probe__")) return;
           if (payload.new.metadata?.last_updated_by !== APP_INSTANCE_ID) {
             updateEditorFromSupabase(payload);
           }
@@ -888,7 +890,8 @@ function App() {
         .from(THOUGHTS_TABLE_NAME)
         .select("*")
         .order("index", { ascending: true })
-        .eq("agent_name", selectedAgentName);
+        .eq("agent_name", selectedAgentName)
+        .neq("body", "__heartbeat_probe__");
 
       if (error) {
         console.error("Error fetching thoughts:", error);
@@ -906,14 +909,21 @@ function App() {
     const fetchAgents = async () => {
       setLoadingAgents(true);
 
-      // Warning: 'distinct' doesn't work via the SDK, workaround with postgres function
-      const { data, error } = await supabase.rpc('get_agent_names')
+      // Fetch from agents table (all registered agents) + thoughts table (any with data)
+      const [agentsResult, thoughtsResult] = await Promise.all([
+        supabase.from('agents').select('name'),
+        supabase.rpc('get_agent_names'),
+      ]);
 
-      if (error) {
-        console.error("Error fetching agent names:", error);
+      const agentTableNames: string[] = (agentsResult.data || []).map((r: {name: string}) => r.name);
+      const thoughtNames: string[] = thoughtsResult.data || [];
+      const merged = Array.from(new Set([...agentTableNames, ...thoughtNames])).sort();
+
+      if (agentsResult.error && thoughtsResult.error) {
+        console.error("Error fetching agent names:", agentsResult.error, thoughtsResult.error);
         setLoadingAgents(false);
       } else {
-        setAgentNames(data || []);
+        setAgentNames(merged);
         setLoadingAgents(false);
       }
     };

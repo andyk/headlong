@@ -77,7 +77,7 @@ async def execute(args: dict) -> str:
 
 
 TOOL = {
-    "name": "visitURL",
+    "name": "visit_url",
     "description": "Fetch a website using a real browser. Can be in the form of clicking a link.",
     "parameters": {
         "type": "object",

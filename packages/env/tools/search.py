@@ -37,7 +37,7 @@ async def execute(args: dict) -> str:
 
 
 TOOL = {
-    "name": "searchGoogle",
+    "name": "search_google",
     "description": "Google search, also known as web search, or just search. Use this to look up things.",
     "parameters": {
         "type": "object",

@@ -91,7 +91,7 @@ def register_webhook(app, on_message: Callable[[str, str], Awaitable[None]]):
 
 
 TOOL = {
-    "name": "sendSMS",
+    "name": "send_sms",
     "description": "Send an SMS text message via Twilio.",
     "parameters": {
         "type": "object",

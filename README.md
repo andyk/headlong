@@ -70,7 +70,7 @@ If you have an AI coding agent like [Claude Code](https://docs.anthropic.com/en/
 brew install tmux
 
 # Python 3.10+ is required
-brew install python@3.11
+brew install python@3.10   # or python@3.11, python@3.12
 
 # Node.js is required for the webapp (and Claude Code if running natively)
 brew install node
