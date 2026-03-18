@@ -2,8 +2,8 @@
 set -e
 
 REPO_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-STATEDIR="$REPO_ROOT/.headlong"
-LOGDIR="$REPO_ROOT/.headlong-logs"
+STATEDIR="${HEADLONG_STATE_DIR:-$REPO_ROOT/.headlong}"
+LOGDIR="${HEADLONG_LOG_DIR:-$REPO_ROOT/.headlong-logs}"
 SERVICES=(env agent webapp)
 
 # Per-service pidfiles and state

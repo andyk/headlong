@@ -126,6 +126,22 @@ function App() {
     action: string;
   } | null>(null);
   const actionStatusTimerRef = useRef<number | null>(null);
+  const [selectedThoughtId, setSelectedThoughtId] = useState<string | null>(null);
+  const [selectedThoughtTrace, setSelectedThoughtTrace] = useState<any>(null);
+  const [tracePaneOpen, setTracePaneOpen] = useState(false);
+  const [traceCollapsed, setTraceCollapsed] = useState<Record<number, boolean>>({});
+  const [traceInspectionEnabled, setTraceInspectionEnabled] = useState(false);
+  const traceInspectionEnabledRef = useRef(false);
+  traceInspectionEnabledRef.current = traceInspectionEnabled;
+
+  async function fetchThoughtTrace(thoughtId: string) {
+    const { data } = await supabase
+      .from(THOUGHTS_TABLE_NAME)
+      .select("metadata")
+      .eq("id", thoughtId)
+      .single();
+    setSelectedThoughtTrace(data?.metadata?.rlm_trace || null);
+  }
 
   function computeNewThoughtIndex(state: EditorState, appendToEnd?: boolean) {
     let newThought = null;
@@ -1061,6 +1077,24 @@ function App() {
 
     const view = new EditorView(editorRef.current, {
       state,
+      handleClick(view, pos, event) {
+        if (!traceInspectionEnabledRef.current) return false;
+        const resolved = view.state.doc.resolve(pos);
+        let thoughtNode: ProseMirrorNode | null = null;
+        for (let d = resolved.depth; d >= 0; d--) {
+          if (resolved.node(d).type.name === "thought") {
+            thoughtNode = resolved.node(d);
+            break;
+          }
+        }
+        if (thoughtNode) {
+          const id = thoughtNode.attrs.id;
+          setSelectedThoughtId(id);
+          fetchThoughtTrace(id);
+          setTracePaneOpen(true);
+        }
+        return false;
+      },
       transformPasted(slice) {
         const humanMark = schema.marks.human_highlight.create();
         const addMark = (fragment: Fragment): Fragment => {
@@ -1169,10 +1203,11 @@ function App() {
           <button
             className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-200 dark:hover:bg-[#2a2a2a]"
             onClick={() => {
-              const scrollEl = editorRef.current?.parentElement;
-              const scrollTop = scrollEl?.scrollTop ?? 0;
               setAgentPaneOpen(prev => !prev);
-              requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = scrollTop; });
+              requestAnimationFrame(() => {
+                const scrollEl = editorRef.current?.parentElement;
+                if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+              });
             }}
           >
             {agentStatus === "attached" ? (
@@ -1195,10 +1230,11 @@ function App() {
           <button
             className="flex items-center space-x-2 p-2 rounded-md cursor-pointer hover:bg-gray-200 dark:hover:bg-[#2a2a2a]"
             onClick={() => {
-              const scrollEl = editorRef.current?.parentElement;
-              const scrollTop = scrollEl?.scrollTop ?? 0;
               setEnvPaneOpen(prev => !prev);
-              requestAnimationFrame(() => { if (scrollEl) scrollEl.scrollTop = scrollTop; });
+              requestAnimationFrame(() => {
+                const scrollEl = editorRef.current?.parentElement;
+                if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+              });
             }}
           >
             {envStatus === "attached" ? (
@@ -1221,7 +1257,7 @@ function App() {
         </div>
       </div>
       <div className="flex-grow min-h-0 flex border border-solid border-[#e3ccfc] dark:border-[#3d2a5c]">
-        <div className={(envPaneOpen || agentPaneOpen) ? "flex-1 min-w-0 overflow-y-auto" : "w-full overflow-y-auto"}>
+        <div className={(envPaneOpen || agentPaneOpen || tracePaneOpen) ? "flex-1 min-w-0 overflow-y-auto" : "w-full overflow-y-auto"}>
           <div ref={editorRef} className="w-full h-full p-1"></div>
         </div>
         {agentPaneOpen && (
@@ -1265,6 +1301,36 @@ function App() {
                     <div>
                       <label className="text-xs text-gray-400 dark:text-gray-500 block mb-1">Temperature</label>
                       <input type="number" step="0.1" max="1.0" min="0.0" value={modelTemperature} onChange={(e) => setModelTemperature(parseFloat(e.target.value))} className="bg-white dark:bg-[#2a2a2a] border border-gray-300 dark:border-[#444] px-2 py-1 text-sm w-20" />
+                    </div>
+                    <div style={{display: "flex", alignItems: "center", justifyContent: "space-between"}}>
+                      <label className="text-xs text-gray-400 dark:text-gray-500">Thought creation inspection</label>
+                      <button
+                        style={{
+                          position: "relative",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          width: "36px",
+                          height: "20px",
+                          borderRadius: "10px",
+                          backgroundColor: traceInspectionEnabled ? "#b87df9" : "#4b5563",
+                          border: "none",
+                          cursor: "pointer",
+                          padding: 0,
+                          flexShrink: 0,
+                          transition: "background-color 0.15s",
+                        }}
+                        onClick={() => { setTraceInspectionEnabled(prev => !prev); if (traceInspectionEnabled) { setTracePaneOpen(false); } }}
+                      >
+                        <span style={{
+                          display: "inline-block",
+                          width: "14px",
+                          height: "14px",
+                          borderRadius: "50%",
+                          backgroundColor: "white",
+                          transform: traceInspectionEnabled ? "translateX(19px)" : "translateX(3px)",
+                          transition: "transform 0.15s",
+                        }} />
+                      </button>
                     </div>
                   </div>
                 )}
@@ -1432,6 +1498,95 @@ function App() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        )}
+        {tracePaneOpen && (
+          <div className="w-1/2 border-l border-gray-200 dark:border-[#333] flex flex-col overflow-hidden bg-gray-50 dark:bg-[#1a1a1a]">
+            <div className="flex items-center justify-between p-3 border-b border-gray-200 dark:border-[#333]">
+              <div className="flex items-center space-x-2">
+                <span style={{fontSize: "16px", fontWeight: "bold"}}>RLM Trace</span>
+                {selectedThoughtTrace?.model && (
+                  <span className="text-xs bg-[#2a2a2a] text-gray-300 px-1.5 py-0.5 rounded">{selectedThoughtTrace.model}</span>
+                )}
+                {selectedThoughtTrace?.finished_reason && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    selectedThoughtTrace.finished_reason === "final_called" ? "bg-green-900 text-green-300" :
+                    selectedThoughtTrace.finished_reason === "max_iterations" ? "bg-red-900 text-red-300" :
+                    "bg-yellow-900 text-yellow-300"
+                  }`}>{selectedThoughtTrace.finished_reason}</span>
+                )}
+              </div>
+              <button className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200" onClick={() => setTracePaneOpen(false)}>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                </svg>
+              </button>
+            </div>
+            <div className="overflow-y-auto flex-1">
+              {selectedThoughtTrace ? (
+                <div>
+                  {selectedThoughtTrace.iterations?.map((iter: any, idx: number) => (
+                    <div key={idx} className="border-b border-gray-200 dark:border-[#333]">
+                      <button
+                        className="w-full flex items-center justify-between p-3 hover:bg-gray-200 dark:hover:bg-[#2a2a2a]"
+                        onClick={() => setTraceCollapsed(p => ({...p, [idx]: !p[idx]}))}
+                      >
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-bold">Iteration {iter.iteration}</span>
+                          {iter.final_called && (
+                            <span className="text-xs bg-green-900 text-green-300 px-1.5 py-0.5 rounded">FINAL</span>
+                          )}
+                          <span className="text-xs text-gray-500">{iter.repl_blocks?.length || 0} blocks</span>
+                        </div>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="text-gray-400 dark:text-gray-500" style={{width: "12px", height: "12px", flexShrink: 0, transform: traceCollapsed[idx] ? "rotate(-90deg)" : "rotate(0deg)", transition: "transform 0.15s"}} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                      </button>
+                      {!traceCollapsed[idx] && (
+                        <div className="px-3 pb-3 space-y-2">
+                          {/* Claude Response */}
+                          <div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Claude Response</div>
+                            <pre className="text-xs text-gray-300 bg-[#2a2a2a] p-2 rounded overflow-x-auto whitespace-pre-wrap break-words" style={{maxHeight: "300px", overflowY: "auto"}}>{iter.claude_response}</pre>
+                          </div>
+                          {/* REPL Blocks */}
+                          {iter.repl_blocks?.map((block: any, bi: number) => (
+                            <div key={bi}>
+                              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">REPL Block {bi + 1}</div>
+                              <div className="text-xs text-[#b87df9] mb-0.5">Code:</div>
+                              <pre className="text-xs text-gray-300 bg-[#2a2a2a] p-2 rounded overflow-x-auto whitespace-pre-wrap break-words" style={{maxHeight: "200px", overflowY: "auto"}}>{block.code}</pre>
+                              <div className="text-xs text-[#b87df9] mb-0.5 mt-1">Output:</div>
+                              <pre className="text-xs text-gray-300 bg-[#232323] p-2 rounded overflow-x-auto whitespace-pre-wrap break-words" style={{maxHeight: "200px", overflowY: "auto"}}>{block.output || "(no output)"}</pre>
+                            </div>
+                          ))}
+                          {/* Sub-LLM Calls */}
+                          {iter.llm_queries?.length > 0 && (
+                            <div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Sub-LLM Calls ({iter.llm_queries.length})</div>
+                              {iter.llm_queries.map((q: any, qi: number) => (
+                                <div key={qi} className="mb-2">
+                                  <div className="text-xs text-[#b87df9] mb-0.5">Prompt:</div>
+                                  <pre className="text-xs text-gray-300 bg-[#2a2a2a] p-2 rounded overflow-x-auto whitespace-pre-wrap break-words" style={{maxHeight: "150px", overflowY: "auto"}}>{q.prompt}</pre>
+                                  <div className="text-xs text-[#b87df9] mb-0.5 mt-1">Response:</div>
+                                  <pre className="text-xs text-gray-300 bg-[#232323] p-2 rounded overflow-x-auto whitespace-pre-wrap break-words" style={{maxHeight: "150px", overflowY: "auto"}}>{q.response}</pre>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {/* FINAL value */}
+                          {iter.final_called && (
+                            <div>
+                              <div className="text-xs text-green-400 mb-1">FINAL Value</div>
+                              <pre className="text-xs text-green-300 bg-green-900/30 border border-green-800 p-2 rounded overflow-x-auto whitespace-pre-wrap break-words">{iter.final_value}</pre>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-4 text-sm text-gray-500 dark:text-gray-400">No trace data available for this thought.</div>
+              )}
             </div>
           </div>
         )}

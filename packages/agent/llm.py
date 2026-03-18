@@ -88,15 +88,24 @@ async def run_rlm_loop(
     temperature: float = DEFAULT_TEMPERATURE,
     max_iterations: int = 10,
     on_step: Optional[Callable[[str], None]] = None,
-) -> str:
+) -> dict:
     """Run the RLM loop: Claude gets a REPL and iterates until FINAL().
 
-    Returns the final thought text.
+    Returns {"thought": str, "rlm_trace": dict}.
     """
     import llm as llm_self  # self-reference for passing to namespace
 
     client = get_client()
-    namespace, final = repl_module.create_repl_namespace(agent_name, llm_self)
+
+    trace = {
+        "model": model,
+        "iterations": [],
+        "finished_reason": None,
+    }
+
+    # Shared trace_log list; we slice per-iteration to split sub-LLM calls
+    llm_trace_log: list = []
+    namespace, final = repl_module.create_repl_namespace(agent_name, llm_self, trace_log=llm_trace_log)
 
     messages = [{"role": "user", "content": "Generate the next thought."}]
 
@@ -105,6 +114,9 @@ async def run_rlm_loop(
             on_step(f"RLM iteration {iteration + 1}/{max_iterations}")
 
         log.info("RLM iteration %d for agent=%s", iteration + 1, agent_name)
+
+        # Mark where sub-LLM calls start for this iteration
+        llm_trace_start = len(llm_trace_log)
 
         response = client.messages.create(
             model=model,
@@ -120,18 +132,35 @@ async def run_rlm_loop(
         # Extract REPL blocks
         blocks = repl_module.extract_repl_blocks(assistant_text)
 
+        iteration_data = {
+            "iteration": iteration + 1,
+            "claude_response": assistant_text,
+            "repl_blocks": [],
+            "final_called": False,
+            "final_value": None,
+            "llm_queries": [],  # populated after REPL execution
+        }
+
         if not blocks:
             # No REPL blocks — treat the entire response as the thought (graceful fallback)
             log.info("RLM: no repl blocks found, using response as thought")
             if on_step:
                 on_step("No REPL blocks, using response directly")
-            return _strip_final_wrapper(assistant_text)
+            trace["finished_reason"] = "no_repl_blocks"
+            iteration_data["llm_queries"] = llm_trace_log[llm_trace_start:]
+            trace["iterations"].append(iteration_data)
+            thought = _strip_final_wrapper(assistant_text)
+            return {"thought": thought, "rlm_trace": trace}
 
         # Execute each block
         all_output = []
         for i, code in enumerate(blocks):
             log.debug("RLM: executing block %d:\n%s", i + 1, code[:200])
             output = repl_module.execute_repl_block(code, namespace)
+            iteration_data["repl_blocks"].append({
+                "code": code,
+                "output": output or "",
+            })
             if output:
                 log.info("RLM: block %d output:\n%s", i + 1, output[:500])
                 all_output.append(output)
@@ -139,7 +168,15 @@ async def run_rlm_loop(
                 log.info("RLM: FINAL called after block %d", i + 1)
                 if on_step:
                     on_step(f"FINAL called — thought produced")
-                return final.value
+                iteration_data["final_called"] = True
+                iteration_data["final_value"] = final.value
+                iteration_data["llm_queries"] = llm_trace_log[llm_trace_start:]
+                trace["finished_reason"] = "final_called"
+                trace["iterations"].append(iteration_data)
+                return {"thought": final.value, "rlm_trace": trace}
+
+        iteration_data["llm_queries"] = llm_trace_log[llm_trace_start:]
+        trace["iterations"].append(iteration_data)
 
         # Feed output back to Claude for next iteration
         combined_output = "\n".join(all_output) if all_output else "(no output)"
@@ -150,6 +187,7 @@ async def run_rlm_loop(
     log.warning("RLM: max iterations (%d) reached for agent=%s", max_iterations, agent_name)
     if on_step:
         on_step(f"Max iterations reached")
+    trace["finished_reason"] = "max_iterations"
     # Return the last assistant message as fallback
     last = messages[-2]["content"].strip() if len(messages) >= 2 else ""
-    return _strip_final_wrapper(last)
+    return {"thought": _strip_final_wrapper(last), "rlm_trace": trace}

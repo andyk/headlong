@@ -17,7 +17,8 @@ WORKDIR /app/headlong/packages/env
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright Chromium browser and its OS dependencies
+# Install Playwright browsers to a shared location accessible by any user
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN playwright install --with-deps chromium
 
 # Create non-root user (Claude Code refuses --dangerously-skip-permissions as root)

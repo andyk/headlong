@@ -4,6 +4,7 @@ Runs a FastAPI server on port 8001 for thought generation streaming,
 loop control, and agent status. Subscribes to Supabase presence.
 """
 
+import os
 import sys
 import signal
 import asyncio
@@ -34,11 +35,12 @@ log = logging.getLogger(__name__)
 
 def start_api_server():
     """Start the FastAPI server in a background thread."""
-    config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=8001, log_level="info")
+    port = int(os.environ.get("HEADLONG_AGENT_PORT", "8001"))
+    config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    log.info("agent API started on port 8001")
+    log.info("agent API started on port %d", port)
 
 
 async def main():

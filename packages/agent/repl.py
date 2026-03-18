@@ -79,13 +79,14 @@ def _get_repl_connection():
     dsn = os.environ.get("AGENT_REPL_DB_URL")
     if not dsn:
         raise RuntimeError("AGENT_REPL_DB_URL must be set")
-    return psycopg2.connect(dsn)
+    return psycopg2.connect(dsn, sslmode="require", gssencmode="disable")
 
 
-def create_repl_namespace(agent_name: str, llm_module) -> tuple[dict, _FinalResult]:
+def create_repl_namespace(agent_name: str, llm_module, trace_log: list | None = None) -> tuple[dict, _FinalResult]:
     """Build the REPL namespace with database, LLM, and embedding helpers.
 
     Returns (namespace_dict, final_result_sentinel).
+    If trace_log is provided, sub-LLM calls are appended to it.
     """
     final = _FinalResult()
     conn = _get_repl_connection()
@@ -112,7 +113,13 @@ def create_repl_namespace(agent_name: str, llm_module) -> tuple[dict, _FinalResu
             temperature=0.3,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text
+        result = response.content[0].text
+        if trace_log is not None:
+            trace_log.append({
+                "prompt": prompt[:500],
+                "response": result[:500],
+            })
+        return result
 
     def embed(text: str) -> list[float]:
         """Get embedding vector via OpenAI text-embedding-3-small."""

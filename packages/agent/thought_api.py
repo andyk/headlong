@@ -108,7 +108,7 @@ async def generate_thought(req: GenerateRequest):
 
     prompt = _resolve_system_prompt(agent_name)
 
-    thought = await llm.run_rlm_loop(
+    result = await llm.run_rlm_loop(
         system_prompt=prompt,
         agent_name=agent_name,
         model=req.model,
@@ -116,13 +116,19 @@ async def generate_thought(req: GenerateRequest):
         temperature=req.temperature,
         on_step=log_activity,
     )
+    thought = result["thought"]
+    rlm_trace = result.get("rlm_trace")
 
     log_activity(f"Generated thought: {thought[:80]}...")
 
     # Persist to DB so realtime subscribers see it
     next_index = supabase_client.get_max_thought_index(agent_name) + 1.0
-    is_action = thought.strip().lower().startswith("action:")
-    metadata = {"needs_handling": is_action, "last_updated_by": supabase_client.AGENT_INSTANCE_ID}
+    is_action = "action:" in thought.strip().lower()
+    metadata = {
+        "needs_handling": is_action,
+        "last_updated_by": supabase_client.AGENT_INSTANCE_ID,
+        "rlm_trace": rlm_trace,
+    }
     row = supabase_client.add_thought(agent_name, thought, next_index, metadata)
 
     return JSONResponse(content={
@@ -152,7 +158,7 @@ async def loop_start(req: LoopStartRequest):
                 agent_name = _agent_name
                 prompt = _resolve_system_prompt(agent_name)
 
-                full_text = await llm.run_rlm_loop(
+                result = await llm.run_rlm_loop(
                     system_prompt=prompt,
                     agent_name=agent_name,
                     model=req.model,
@@ -160,10 +166,16 @@ async def loop_start(req: LoopStartRequest):
                     temperature=req.temperature,
                     on_step=log_activity,
                 )
+                full_text = result["thought"]
+                rlm_trace = result.get("rlm_trace")
 
                 next_index = supabase_client.get_max_thought_index(agent_name) + 1.0
-                is_action = full_text.strip().lower().startswith("action:")
-                metadata = {"needs_handling": is_action, "last_updated_by": supabase_client.AGENT_INSTANCE_ID}
+                is_action = "action:" in full_text.strip().lower()
+                metadata = {
+                    "needs_handling": is_action,
+                    "last_updated_by": supabase_client.AGENT_INSTANCE_ID,
+                    "rlm_trace": rlm_trace,
+                }
                 supabase_client.add_thought(agent_name, full_text, next_index, metadata)
                 log_activity(f"Loop thought: {full_text[:80]}...")
 

@@ -23,6 +23,7 @@ import llm
 import tools
 from tools.telegram import start_listener as start_telegram_listener, stop_listener as stop_telegram_listener
 from tools.sms import register_webhook as register_sms_webhook
+from tools.chat import start_listener as start_chat_listener, stop_listener as stop_chat_listener
 from thought_api import app as fastapi_app, set_agent_name, log_activity
 
 logging.basicConfig(
@@ -71,25 +72,47 @@ async def embed_thought(thought: dict) -> None:
 _handled_ids: set[str] = set()
 _embedded_ids: set[str] = set()
 
+def _extract_action(body: str) -> str | None:
+    """Extract the action part from a thought body.
+
+    Handles both "action: ..." at the start and "...\naction: ..." mid-thought.
+    Returns the action text (everything from "action: " onward) or None.
+    """
+    lower = body.lower()
+    if lower.startswith("action:"):
+        return body
+    # Look for action: on its own line within the thought
+    import re
+    m = re.search(r'\n(action:\s*.+)', body, re.IGNORECASE | re.DOTALL)
+    if m:
+        return m.group(1)
+    return None
+
+
 async def handle_thought(thought: dict, agent_name: str) -> None:
     """Handle an incoming thought that needs action."""
     body = thought.get("body", "")
     metadata = thought.get("metadata") or {}
 
-    # Only handle thoughts that start with "action: " and have needs_handling=true
+    # Extract action part — could be at start or after reflection text
+    action_body = _extract_action(body)
+
     if not (
-        body.lower().startswith("action: ")
+        action_body is not None
         and isinstance(metadata, dict)
         and metadata.get("needs_handling") is True
     ):
         log.debug(
-            "skipping thought: starts_with_action=%s, metadata_type=%s, needs_handling=%s, body=%s...",
-            body.lower().startswith("action: "),
+            "skipping thought: has_action=%s, metadata_type=%s, needs_handling=%s, body=%s...",
+            action_body is not None,
             type(metadata).__name__,
             metadata.get("needs_handling") if isinstance(metadata, dict) else "N/A",
             body[:80],
         )
         return
+
+    # Use extracted action part for downstream processing
+    body = action_body
 
     thought_id = thought.get("id")
 
@@ -159,11 +182,12 @@ async def handle_thought(thought: dict, agent_name: str) -> None:
 
 def start_api_server():
     """Start the FastAPI thought streaming server in a background thread."""
-    config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=8000, log_level="info")
+    port = int(os.environ.get("HEADLONG_ENV_PORT", "8000"))
+    config = uvicorn.Config(fastapi_app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    log.info("thought streaming API started on port 8000")
+    log.info("thought streaming API started on port %d", port)
 
 
 async def main():
@@ -240,6 +264,14 @@ async def main():
         await supabase_client.add_thought(agent_name, text)
 
     register_sms_webhook(fastapi_app, on_sms_message)
+
+    # Start chat listener — inter-agent messages become thoughts
+    async def on_chat_message(from_agent: str, text: str):
+        log.info("chat -> thought: %s", text[:100])
+        log_activity(f"Chat message from {from_agent}: {text[:120]}")
+        await supabase_client.add_thought(agent_name, text)
+
+    await start_chat_listener(agent_name, on_chat_message)
 
     log.info("env daemon running. Listening for thoughts...")
     log.info("registered tools: %s", list(tools.TOOLS.keys()))
