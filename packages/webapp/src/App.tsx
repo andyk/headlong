@@ -17,6 +17,10 @@ import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
 const THOUGHTS_TABLE_NAME = "thoughts";
 const APP_INSTANCE_ID = uuidv4(); // used to keep subscriptions from handling their own updates
+const ENV_PORT = (import.meta as any).env?.VITE_ENV_PORT || '8000';
+const ENV_URL = `http://localhost:${ENV_PORT}`;
+const AGENT_PORT = (import.meta as any).env?.VITE_AGENT_PORT || '8001';
+const AGENT_URL = `http://localhost:${AGENT_PORT}`;
 
 const models: string[] = await getModels().catch(() => []);
 
@@ -133,6 +137,17 @@ function App() {
   const [traceInspectionEnabled, setTraceInspectionEnabled] = useState(false);
   const traceInspectionEnabledRef = useRef(false);
   traceInspectionEnabledRef.current = traceInspectionEnabled;
+  const [agentRestarting, setAgentRestarting] = useState(false);
+  const [envRestarting, setEnvRestarting] = useState(false);
+
+  async function restartService(service: "agent" | "env") {
+    const setter = service === "agent" ? setAgentRestarting : setEnvRestarting;
+    setter(true);
+    try {
+      await fetch(`${AGENT_URL}/restart/${service}`, { method: "POST" });
+    } catch (_) { /* agent may die before responding */ }
+    setTimeout(() => setter(false), service === "agent" ? 12000 : 15000);
+  }
 
   async function fetchThoughtTrace(thoughtId: string) {
     const { data } = await supabase
@@ -518,7 +533,7 @@ function App() {
   useEffect(() => {
     const checkEnv = async () => {
       try {
-        const res = await fetch("http://localhost:8000/env/status");
+        const res = await fetch(`${ENV_URL}/env/status`);
         if (res.ok) {
           setEnvStatus("attached");
           const data = await res.json();
@@ -581,7 +596,7 @@ function App() {
     if (!envPaneOpen) return;
     const fetchActivity = async () => {
       try {
-        const res = await fetch("http://localhost:8000/env/activity");
+        const res = await fetch(`${ENV_URL}/env/activity`);
         if (res.ok) {
           const data = await res.json();
           setEnvActivity(data);
@@ -1270,6 +1285,20 @@ function App() {
                 {agentInfo && <span className="text-xs text-gray-500 dark:text-gray-400">uptime: {Math.floor(agentInfo.uptime_seconds / 60)}m {agentInfo.uptime_seconds % 60}s</span>}
               </div>
               <div className="flex items-center space-x-2">
+                <button
+                  className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-gray-200"
+                  title="Restart agent"
+                  onClick={() => restartService("agent")}
+                  disabled={agentRestarting}
+                >
+                  {agentRestarting ? (
+                    <span className="text-xs text-yellow-500">restarting...</span>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  )}
+                </button>
                 <button className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-gray-200" onClick={() => setAgentPaneOpen(false)}>
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
@@ -1404,8 +1433,22 @@ function App() {
                 {envUptime > 0 && <span className="text-xs text-gray-500 dark:text-gray-400">uptime: {Math.floor(envUptime / 60)}m {envUptime % 60}s</span>}
               </div>
               <div className="flex items-center space-x-2">
+                <button
+                  className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-gray-200"
+                  title="Restart environment"
+                  onClick={() => restartService("env")}
+                  disabled={envRestarting}
+                >
+                  {envRestarting ? (
+                    <span className="text-xs text-yellow-500">restarting...</span>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  )}
+                </button>
                 <a
-                  href="http://localhost:8000/env/status"
+                  href={`${ENV_URL}/env/status`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-gray-200"

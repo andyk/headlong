@@ -2,28 +2,146 @@
 set -e
 
 REPO_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
-STATEDIR="${HEADLONG_STATE_DIR:-$REPO_ROOT/.headlong}"
-LOGDIR="${HEADLONG_LOG_DIR:-$REPO_ROOT/.headlong-logs}"
+BASE_STATEDIR="${HEADLONG_STATE_DIR:-$REPO_ROOT/.headlong}"
+BASE_LOGDIR="${HEADLONG_LOG_DIR:-$REPO_ROOT/.headlong-logs}"
 SERVICES=(env agent webapp)
+
+# Default ports
+ENV_PORT=8000
+AGENT_PORT=8001
+WEBAPP_PORT=5173
+
+# State/log dirs are set per-agent by set_agent_dirs()
+STATEDIR="$BASE_STATEDIR"
+LOGDIR="$BASE_LOGDIR"
+
+set_agent_dirs() {
+  local name="$1"
+  # Sanitize agent name for use as directory name (lowercase, spaces to hyphens)
+  local slug
+  slug=$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
+  STATEDIR="$BASE_STATEDIR/$slug"
+  LOGDIR="$BASE_LOGDIR/$slug"
+}
 
 # Per-service pidfiles and state
 pidfile_for()  { echo "$STATEDIR/$1.pid"; }
 agentfile()    { echo "$STATEDIR/agent_name"; }
+portsfile()    { echo "$STATEDIR/ports"; }
+
+# --- Port collision avoidance ---
+
+# Check if a port is available (not claimed by another agent and not in use)
+find_free_port() {
+  local port=$1
+  local own_dir="${2:-}"  # current agent's state dir to skip
+
+  while true; do
+    local collision=false
+
+    # Check ports claimed by other running agents
+    if [ -d "$BASE_STATEDIR" ]; then
+      for pf in "$BASE_STATEDIR"/*/ports; do
+        [ -f "$pf" ] || continue
+        # Skip our own port file
+        [ "$(dirname "$pf")" = "$own_dir" ] && continue
+        if grep -q "=$port$" "$pf" 2>/dev/null; then
+          collision=true
+          break
+        fi
+      done
+    fi
+
+    # Check if port is actually in use on the system
+    if ! $collision; then
+      if ss -tlnH 2>/dev/null | grep -q ":${port}\b" || \
+         lsof -iTCP:"$port" -sTCP:LISTEN -t &>/dev/null; then
+        collision=true
+      fi
+    fi
+
+    if $collision; then
+      port=$((port + 1))
+    else
+      break
+    fi
+  done
+
+  echo "$port"
+}
+
+# Resolve collisions for all three port variables
+resolve_port_collisions() {
+  local own_dir="$1"
+  local orig_env=$ENV_PORT orig_agent=$AGENT_PORT orig_webapp=$WEBAPP_PORT
+
+  # Collect all three into a set so we also avoid self-collision
+  # (e.g. if defaults were manually set to the same value)
+  ENV_PORT=$(find_free_port "$ENV_PORT" "$own_dir")
+
+  # For agent port, also avoid the just-assigned env port
+  local port=$AGENT_PORT
+  while true; do
+    port=$(find_free_port "$port" "$own_dir")
+    if [ "$port" -eq "$ENV_PORT" ]; then
+      port=$((port + 1))
+      continue
+    fi
+    break
+  done
+  AGENT_PORT=$port
+
+  # For webapp port, also avoid env and agent ports
+  port=$WEBAPP_PORT
+  while true; do
+    port=$(find_free_port "$port" "$own_dir")
+    if [ "$port" -eq "$ENV_PORT" ] || [ "$port" -eq "$AGENT_PORT" ]; then
+      port=$((port + 1))
+      continue
+    fi
+    break
+  done
+  WEBAPP_PORT=$port
+
+  # Notify user if any ports were changed
+  if [ "$ENV_PORT" -ne "$orig_env" ] || [ "$AGENT_PORT" -ne "$orig_agent" ] || [ "$WEBAPP_PORT" -ne "$orig_webapp" ]; then
+    echo "  (ports adjusted to avoid collisions: env=$ENV_PORT, agent=$AGENT_PORT, webapp=$WEBAPP_PORT)"
+  fi
+}
+
+# --- Save/load ports for a running agent ---
+save_ports() {
+  echo "ENV_PORT=$ENV_PORT" > "$(portsfile)"
+  echo "AGENT_PORT=$AGENT_PORT" >> "$(portsfile)"
+  echo "WEBAPP_PORT=$WEBAPP_PORT" >> "$(portsfile)"
+}
+
+load_ports() {
+  local pf
+  pf=$(portsfile)
+  if [ -f "$pf" ]; then
+    source "$pf"
+  fi
+}
 
 # --- Usage ---
 usage() {
   echo "Usage: ./headlong <command> [options]"
   echo ""
   echo "Commands:"
-  echo "  start <agent_name> [--no-docker]   Start all services"
-  echo "  start <service> [--no-docker]      Start a single service (env|agent|webapp)"
-  echo "  stop  [service]                    Stop all or a single service"
-  echo "  status                             Show status of all services"
-  echo "  logs  [service]                    Tail logs (all or one service)"
+  echo "  start <agent_name> [options]       Start all services"
+  echo "  start <service> [options]           Start a single service (env|agent|webapp)"
+  echo "  stop  [agent_name] [service]       Stop all or a single service"
+  echo "  status [agent_name]                Show status of all services"
+  echo "  logs  [agent_name] [service]       Tail logs (all or one service)"
+  echo "  list                               List running agents"
   echo ""
   echo "Options:"
-  echo "  --no-docker     Force native mode for env daemon"
-  echo "  --help, -h      Show this help message"
+  echo "  --no-docker               Force native mode for env daemon"
+  echo "  --env-port PORT           Port for env daemon (default: 8000)"
+  echo "  --agent-port PORT         Port for agent daemon (default: 8001)"
+  echo "  --webapp-port PORT        Port for webapp (default: 5173)"
+  echo "  --help, -h                Show this help message"
 }
 
 # --- Collect all PIDs in a process tree ---
@@ -72,6 +190,55 @@ get_agent_name() {
   fi
 }
 
+# --- Find agent state dir by name ---
+find_agent_dir() {
+  local name="$1"
+  local slug
+  slug=$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
+  local dir="$BASE_STATEDIR/$slug"
+  if [ -d "$dir" ]; then
+    echo "$dir"
+  else
+    echo ""
+  fi
+}
+
+# --- List running agents ---
+list_agents() {
+  echo "=== Running Agents ==="
+  local found=false
+  if [ -d "$BASE_STATEDIR" ]; then
+    for dir in "$BASE_STATEDIR"/*/; do
+      [ -d "$dir" ] || continue
+      local af="$dir/agent_name"
+      if [ -f "$af" ]; then
+        local name
+        name=$(cat "$af")
+        local running=false
+        for svc in "${SERVICES[@]}"; do
+          local pf="$dir/$svc.pid"
+          if [ -f "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
+            running=true
+            break
+          fi
+        done
+        if $running; then
+          found=true
+          local ports_info=""
+          if [ -f "$dir/ports" ]; then
+            source "$dir/ports"
+            ports_info=" (env:$ENV_PORT, agent:$AGENT_PORT, webapp:$WEBAPP_PORT)"
+          fi
+          echo "  $name$ports_info"
+        fi
+      fi
+    done
+  fi
+  if ! $found; then
+    echo "  (no agents running)"
+  fi
+}
+
 # --- Start a single service ---
 start_service() {
   local svc=$1
@@ -94,12 +261,14 @@ start_service() {
         use_docker=true
       fi
 
+      local container_name="headlong-env-$(echo "$agent_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+
       if $use_docker; then
-        echo "  Starting env (Docker)..."
+        echo "  Starting env (Docker) on port $ENV_PORT..."
         docker build -q -t headlong-env "$REPO_ROOT/packages/env" >/dev/null
-        docker rm -f headlong-env 2>/dev/null || true
+        docker rm -f "$container_name" 2>/dev/null || true
         docker run -d \
-          --name headlong-env \
+          --name "$container_name" \
           -e ANTHROPIC_API_KEY \
           -e SUPABASE_URL_HEADLONG \
           -e SUPABASE_SERVICE_ROLE_KEY_HEADLONG \
@@ -108,39 +277,40 @@ start_service() {
           -e SERPAPI_API_KEY \
           -e OPENAI_API_KEY \
           -e OPENROUTER_API_KEY \
-          -p 8000:8000 \
+          -e HEADLONG_ENV_PORT=8000 \
+          -p "$ENV_PORT":8000 \
           -v "$REPO_ROOT":/app/headlong \
           -w /app/headlong/packages/env \
           headlong-env \
           "$agent_name" >/dev/null
-        docker logs -f headlong-env >> "$LOGDIR/env.log" 2>&1 &
+        docker logs -f "$container_name" >> "$LOGDIR/env.log" 2>&1 &
         echo $! > "$(pidfile_for env)"
       else
-        echo "  Starting env (native)..."
+        echo "  Starting env (native) on port $ENV_PORT..."
         (
           cd "$REPO_ROOT/packages/env"
           source venv/bin/activate
-          python main.py "$agent_name"
+          HEADLONG_ENV_PORT="$ENV_PORT" python main.py "$agent_name"
         ) >> "$LOGDIR/env.log" 2>&1 &
         echo $! > "$(pidfile_for env)"
       fi
       ;;
 
     agent)
-      echo "  Starting agent..."
+      echo "  Starting agent on port $AGENT_PORT..."
       (
         cd "$REPO_ROOT/packages/agent"
         source venv/bin/activate
-        python main.py "$agent_name"
+        HEADLONG_AGENT_PORT="$AGENT_PORT" python main.py "$agent_name"
       ) >> "$LOGDIR/agent.log" 2>&1 &
       echo $! > "$(pidfile_for agent)"
       ;;
 
     webapp)
-      echo "  Starting webapp..."
+      echo "  Starting webapp on port $WEBAPP_PORT..."
       (
         cd "$REPO_ROOT/packages/webapp"
-        npm run dev
+        VITE_ENV_PORT="$ENV_PORT" VITE_AGENT_PORT="$AGENT_PORT" npm run dev -- --port "$WEBAPP_PORT"
       ) >> "$LOGDIR/webapp.log" 2>&1 &
       echo $! > "$(pidfile_for webapp)"
       ;;
@@ -162,9 +332,9 @@ stop_service() {
     # Try killing by port as fallback
     local port
     case "$svc" in
-      env)    port=8000 ;;
-      agent)  port=8001 ;;
-      webapp) port=5173 ;;
+      env)    port=$ENV_PORT ;;
+      agent)  port=$AGENT_PORT ;;
+      webapp) port=$WEBAPP_PORT ;;
     esac
     local port_pid
     port_pid=$(lsof -ti:"$port" 2>/dev/null | head -1)
@@ -207,7 +377,10 @@ stop_service() {
 
   # Clean up Docker container for env
   if [ "$svc" = "env" ]; then
-    docker rm -f headlong-env 2>/dev/null || true
+    local agent_name
+    agent_name=$(get_agent_name)
+    local container_name="headlong-env-$(echo "$agent_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+    docker rm -f "$container_name" 2>/dev/null || true
   fi
 }
 
@@ -216,17 +389,24 @@ do_start() {
   local agent_name=""
   local no_docker=false
   local target_service=""
+  local args=("$@")
+  local i=0
 
-  for arg in "$@"; do
-    case "$arg" in
+  while [ $i -lt ${#args[@]} ]; do
+    case "${args[$i]}" in
       --no-docker) no_docker=true ;;
+      --env-port)
+        i=$((i + 1)); ENV_PORT="${args[$i]}" ;;
+      --agent-port)
+        i=$((i + 1)); AGENT_PORT="${args[$i]}" ;;
+      --webapp-port)
+        i=$((i + 1)); WEBAPP_PORT="${args[$i]}" ;;
       env|agent|webapp)
-        target_service="$arg"
-        ;;
+        target_service="${args[$i]}" ;;
       *)
-        agent_name="$arg"
-        ;;
+        agent_name="${args[$i]}" ;;
     esac
+    i=$((i + 1))
   done
 
   # Starting a single service
@@ -241,6 +421,8 @@ do_start() {
         exit 1
       fi
     fi
+    set_agent_dirs "$agent_name"
+    load_ports
     start_service "$target_service" "$agent_name" "$no_docker"
     return
   fi
@@ -250,14 +432,20 @@ do_start() {
     agent_name=$(get_agent_name)
   fi
   if [ -z "$agent_name" ]; then
-    echo "Usage: ./headlong start <agent_name> [--no-docker]"
+    echo "Usage: ./headlong start <agent_name> [--no-docker] [--env-port PORT] [--agent-port PORT] [--webapp-port PORT]"
     echo "Example: ./headlong start \"Bobby Wilder\""
+    echo "Example: ./headlong start \"Alice\" --env-port 8010 --agent-port 8011 --webapp-port 5174"
     exit 1
   fi
 
-  # Save agent name for future single-service starts
+  # Namespace state and logs by agent name
+  set_agent_dirs "$agent_name"
+
+  # Save agent name and ports for future single-service starts
   mkdir -p "$STATEDIR"
   echo "$agent_name" > "$(agentfile)"
+  resolve_port_collisions "$STATEDIR"
+  save_ports
 
   # Clear logs on full start
   rm -rf "$LOGDIR"
@@ -271,23 +459,65 @@ do_start() {
   echo ""
   echo "=== Headlong is running ==="
   echo "  Agent:   $agent_name"
-  echo "  Env:     http://localhost:8000"
-  echo "  Agent:   http://localhost:8001"
-  echo "  Webapp:  http://localhost:5173"
+  echo "  Env:     http://localhost:$ENV_PORT"
+  echo "  Agent:   http://localhost:$AGENT_PORT"
+  echo "  Webapp:  http://localhost:$WEBAPP_PORT"
   echo ""
-  echo "Run './headlong logs' to tail output, './headlong stop' to shut down."
+  echo "Run './headlong logs $agent_name' to tail output, './headlong stop $agent_name' to shut down."
 }
 
 # --- Stop command ---
 do_stop() {
-  local target_service="${1:-}"
+  local agent_name=""
+  local target_service=""
+
+  for arg in "$@"; do
+    case "$arg" in
+      env|agent|webapp) target_service="$arg" ;;
+      *) agent_name="$arg" ;;
+    esac
+  done
+
+  # If agent name given, namespace to that agent
+  if [ -n "$agent_name" ]; then
+    set_agent_dirs "$agent_name"
+    load_ports
+  else
+    # If no agent name, try to find the only running agent
+    local count=0
+    local found_dir=""
+    if [ -d "$BASE_STATEDIR" ]; then
+      for dir in "$BASE_STATEDIR"/*/; do
+        [ -d "$dir" ] || continue
+        if [ -f "$dir/agent_name" ]; then
+          for svc in "${SERVICES[@]}"; do
+            if [ -f "$dir/$svc.pid" ] && kill -0 "$(cat "$dir/$svc.pid")" 2>/dev/null; then
+              count=$((count + 1))
+              found_dir="$dir"
+              break
+            fi
+          done
+        fi
+      done
+    fi
+    if [ "$count" -gt 1 ]; then
+      echo "Multiple agents running. Specify which to stop:"
+      list_agents
+      exit 1
+    elif [ "$count" -eq 1 ] && [ -n "$found_dir" ]; then
+      STATEDIR="$found_dir"
+      LOGDIR="$BASE_LOGDIR/$(basename "$found_dir")"
+      agent_name=$(cat "$found_dir/agent_name")
+      load_ports
+    fi
+  fi
 
   if [ -n "$target_service" ]; then
     stop_service "$target_service"
     return
   fi
 
-  echo "Stopping Headlong..."
+  echo "Stopping Headlong${agent_name:+ for $agent_name}..."
   for svc in "${SERVICES[@]}"; do
     stop_service "$svc"
   done
@@ -296,7 +526,19 @@ do_stop() {
 
 # --- Logs command ---
 do_logs() {
-  local target_service="${1:-}"
+  local agent_name=""
+  local target_service=""
+
+  for arg in "$@"; do
+    case "$arg" in
+      env|agent|webapp) target_service="$arg" ;;
+      *) agent_name="$arg" ;;
+    esac
+  done
+
+  if [ -n "$agent_name" ]; then
+    set_agent_dirs "$agent_name"
+  fi
 
   if [ ! -d "$LOGDIR" ]; then
     echo "No logs found. Is Headlong running?"
@@ -318,13 +560,20 @@ do_logs() {
 
 # --- Status command ---
 do_status() {
+  local agent_name="${1:-}"
+
+  if [ -n "$agent_name" ]; then
+    set_agent_dirs "$agent_name"
+    load_ports
+  fi
+
   echo "=== Headlong Status ==="
   echo ""
 
-  local agent_name
-  agent_name=$(get_agent_name)
-  if [ -n "$agent_name" ]; then
-    echo "  Agent name: $agent_name"
+  local stored_name
+  stored_name=$(get_agent_name)
+  if [ -n "$stored_name" ]; then
+    echo "  Agent name: $stored_name"
     echo ""
   fi
 
@@ -332,9 +581,9 @@ do_status() {
   for svc in "${SERVICES[@]}"; do
     local port
     case "$svc" in
-      env)    port=8000 ;;
-      agent)  port=8001 ;;
-      webapp) port=5173 ;;
+      env)    port=$ENV_PORT ;;
+      agent)  port=$AGENT_PORT ;;
+      webapp) port=$WEBAPP_PORT ;;
     esac
 
     local pf_pid="" port_pid="" status_icon status_detail
@@ -363,24 +612,25 @@ do_status() {
   echo ""
 
   # Docker container
-  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^headlong-env$'; then
-    echo "  Docker:  headlong-env container running"
+  local container_name="headlong-env-$(echo "$stored_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
+    echo "  Docker:  $container_name container running"
   fi
 
   # Agent API live info
-  local agent_status
-  agent_status=$(curl -s --max-time 2 http://localhost:8001/agent/status 2>/dev/null || true)
-  if [ -n "$agent_status" ]; then
+  local agent_api_status
+  agent_api_status=$(curl -s --max-time 2 "http://localhost:$AGENT_PORT/agent/status" 2>/dev/null || true)
+  if [ -n "$agent_api_status" ]; then
     local api_name uptime
-    api_name=$(echo "$agent_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('agent_name',''))" 2>/dev/null || true)
-    uptime=$(echo "$agent_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('uptime_seconds',0))" 2>/dev/null || true)
+    api_name=$(echo "$agent_api_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('agent_name',''))" 2>/dev/null || true)
+    uptime=$(echo "$agent_api_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('uptime_seconds',0))" 2>/dev/null || true)
     if [ -n "$api_name" ]; then
       echo "  Agent:   $api_name (uptime ${uptime}s)"
     fi
   fi
 
   local loop_status
-  loop_status=$(curl -s --max-time 2 http://localhost:8001/loop/status 2>/dev/null || true)
+  loop_status=$(curl -s --max-time 2 "http://localhost:$AGENT_PORT/loop/status" 2>/dev/null || true)
   if [ -n "$loop_status" ]; then
     local running
     running=$(echo "$loop_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('running',False))" 2>/dev/null || true)
@@ -405,11 +655,15 @@ case "$COMMAND" in
     do_stop "$@"
     ;;
   status)
-    do_status
+    shift
+    do_status "$@"
     ;;
   logs)
     shift
     do_logs "$@"
+    ;;
+  list)
+    list_agents
     ;;
   --help|-h)
     usage

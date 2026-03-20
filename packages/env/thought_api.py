@@ -38,7 +38,7 @@ def log_activity(message: str) -> None:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origin_regex=r"http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -63,3 +63,6 @@ def get_env_status():
 @app.get("/env/activity")
 def get_env_activity():
     return JSONResponse(content=list(_activity_log))
+@app.get("/health")
+def health_check():
+    return {"status": "healthy"}

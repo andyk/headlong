@@ -6,6 +6,10 @@ Provides thought generation streaming, loop control, and agent status.
 from typing import Optional
 
 import logging
+import os
+import signal
+import subprocess
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -52,7 +56,7 @@ def log_activity(message: str) -> None:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origin_regex=r"http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -209,6 +213,28 @@ def loop_status():
     return JSONResponse(content={
         "running": _loop_running,
     })
+
+
+@app.post("/restart/{service}")
+async def restart_service(service: str):
+    if service not in ("agent", "env"):
+        return JSONResponse(status_code=400, content={"error": "Invalid service"})
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    script = os.path.join(repo_root, "headlong")
+
+    subprocess.Popen(
+        f'sleep 1 && "{script}" stop {service} && sleep 1 && "{script}" start {service}',
+        shell=True, start_new_session=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    log_activity(f"Restart requested for {service}")
+
+    if service == "agent":
+        # Kill ourselves after responding so the detached process can restart us
+        threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+
+    return JSONResponse(content={"status": "restarting", "service": service})
 
 
 @app.get("/agent/status")

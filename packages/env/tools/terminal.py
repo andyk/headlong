@@ -90,11 +90,14 @@ async def type_in_bash(args: dict) -> str:
     )
 
     if is_special:
+        log.info("type_in_bash: sending special key '%s' via pane.cmd('send-keys', ...)", stripped)
         pane.cmd("send-keys", stripped)
+        # Special keys (Enter, Escape, etc.) need more time for TUI apps to process
+        await asyncio.sleep(1.0)
     else:
+        log.info("type_in_bash: sending literal text '%s' via pane.send_keys(enter=False)", stripped)
         pane.send_keys(stripped, enter=False)
-
-    await asyncio.sleep(0.1)
+        await asyncio.sleep(0.3)
 
     output = pane.capture_pane()
     output_text = "\n".join(output) if isinstance(output, list) else str(output)

@@ -168,7 +168,8 @@ environment layer.\
     # Subscribe to presence
     presence_channel = await supabase_client.subscribe_to_presence()
 
-    log.info("agent daemon running on port 8001")
+    port = int(os.environ.get("HEADLONG_AGENT_PORT", "8001"))
+    log.info("agent daemon running on port %d", port)
 
     # Keep running until interrupted
     stop_event = asyncio.Event()

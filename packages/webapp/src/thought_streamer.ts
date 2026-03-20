@@ -1,5 +1,6 @@
 
-const AGENT_URL = 'http://localhost:8001';
+const AGENT_PORT = (import.meta as any).env?.VITE_AGENT_PORT || '8001';
+const AGENT_URL = `http://localhost:${AGENT_PORT}`;
 
 async function getModels() {
   const response = await fetch(AGENT_URL + '/models');
