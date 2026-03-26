@@ -729,9 +729,7 @@ do_create() {
   # --- Required credentials (written to base .env if missing) ---
   # These are shared infra secrets needed by all agents.
 
-  # Apply any flag values first
-  [ -n "$anthropic_key" ] && ANTHROPIC_API_KEY="$anthropic_key"
-  [ -n "$openai_key" ] && OPENAI_API_KEY="$openai_key"
+  # Apply any flag values for required credentials
   [ -n "$supabase_url" ] && SUPABASE_URL_HEADLONG="$supabase_url"
   [ -n "$supabase_key" ] && SUPABASE_SERVICE_ROLE_KEY_HEADLONG="$supabase_key"
 
@@ -760,8 +758,6 @@ do_create() {
   }
 
   echo "Checking required credentials..."
-  require_var ANTHROPIC_API_KEY "Anthropic API key" "--anthropic-key"
-  require_var OPENAI_API_KEY "OpenAI API key" "--openai-key"
   require_var SUPABASE_URL_HEADLONG "Supabase project URL (e.g. https://xyz.supabase.co)" "--supabase-url"
   require_var SUPABASE_SERVICE_ROLE_KEY_HEADLONG "Supabase service role key" "--supabase-key"
 
