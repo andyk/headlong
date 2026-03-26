@@ -142,10 +142,12 @@ usage() {
   echo "  list                               List running agents"
   echo ""
   echo "Create options:"
+  echo "  --anthropic-key KEY       Anthropic API key"
+  echo "  --openai-key KEY          OpenAI API key"
+  echo "  --supabase-url URL        Supabase project URL"
+  echo "  --supabase-key KEY        Supabase service role key"
   echo "  --telegram-token TOKEN    Telegram bot token for this agent"
   echo "  --telegram-chat-id ID     Telegram chat ID for this agent"
-  echo "  --openai-key KEY          OpenAI API key override"
-  echo "  --anthropic-key KEY       Anthropic API key override"
   echo ""
   echo "Start options:"
   echo "  --no-docker               Force native mode for env daemon"
@@ -667,6 +669,8 @@ do_create() {
   local telegram_chat_id=""
   local openai_key=""
   local anthropic_key=""
+  local supabase_url=""
+  local supabase_key=""
   local args=("$@")
   local i=0
 
@@ -680,6 +684,10 @@ do_create() {
         i=$((i + 1)); openai_key="${args[$i]}" ;;
       --anthropic-key)
         i=$((i + 1)); anthropic_key="${args[$i]}" ;;
+      --supabase-url)
+        i=$((i + 1)); supabase_url="${args[$i]}" ;;
+      --supabase-key)
+        i=$((i + 1)); supabase_key="${args[$i]}" ;;
       *)
         agent_name="${args[$i]}" ;;
     esac
@@ -687,7 +695,15 @@ do_create() {
   done
 
   if [ -z "$agent_name" ]; then
-    echo "Usage: ./headlong create <agent_name> [--telegram-token TOKEN] [--telegram-chat-id ID] ..."
+    echo "Usage: ./headlong create <agent_name> [options]"
+    echo ""
+    echo "Options:"
+    echo "  --anthropic-key KEY       Anthropic API key"
+    echo "  --openai-key KEY          OpenAI API key"
+    echo "  --supabase-url URL        Supabase project URL"
+    echo "  --supabase-key KEY        Supabase service role key"
+    echo "  --telegram-token TOKEN    Telegram bot token"
+    echo "  --telegram-chat-id ID     Telegram chat ID"
     exit 1
   fi
 
@@ -703,17 +719,62 @@ do_create() {
   mkdir -p "$agent_dir"
   echo "$agent_name" > "$agent_dir/agent_name"
 
-  # Load base env for defaults when prompting
+  # Load base env for current values
   if [ -f "$REPO_ROOT/.env" ]; then
     set -a
     source "$REPO_ROOT/.env"
     set +a
   fi
 
-  # Collect per-agent overrides (from flags or interactive prompts)
+  # --- Required credentials (written to base .env if missing) ---
+  # These are shared infra secrets needed by all agents.
+
+  # Apply any flag values first
+  [ -n "$anthropic_key" ] && ANTHROPIC_API_KEY="$anthropic_key"
+  [ -n "$openai_key" ] && OPENAI_API_KEY="$openai_key"
+  [ -n "$supabase_url" ] && SUPABASE_URL_HEADLONG="$supabase_url"
+  [ -n "$supabase_key" ] && SUPABASE_SERVICE_ROLE_KEY_HEADLONG="$supabase_key"
+
+  local base_env_changed=false
+
+  # Helper: prompt for a required var if missing, write to base .env
+  require_var() {
+    local var_name="$1" label="$2" flag_name="$3"
+    local current="${!var_name}"
+    if [ -n "$current" ]; then
+      return
+    fi
+    if [ -t 0 ]; then
+      read -rp "  $label: " new_val
+      if [ -z "$new_val" ]; then
+        echo "  ERROR: $var_name is required."
+        exit 1
+      fi
+      eval "export $var_name=\"\$new_val\""
+      echo "$var_name=$new_val" >> "$REPO_ROOT/.env"
+      base_env_changed=true
+    else
+      echo "ERROR: $var_name is required. Pass $flag_name or set it in .env"
+      exit 1
+    fi
+  }
+
+  echo "Checking required credentials..."
+  require_var ANTHROPIC_API_KEY "Anthropic API key" "--anthropic-key"
+  require_var OPENAI_API_KEY "OpenAI API key" "--openai-key"
+  require_var SUPABASE_URL_HEADLONG "Supabase project URL (e.g. https://xyz.supabase.co)" "--supabase-url"
+  require_var SUPABASE_SERVICE_ROLE_KEY_HEADLONG "Supabase service role key" "--supabase-key"
+
+  if $base_env_changed; then
+    echo "  Saved to $REPO_ROOT/.env"
+  else
+    echo "  All required credentials found."
+  fi
+  echo ""
+
+  # --- Per-agent overrides (written to agent .env) ---
   local overrides=""
 
-  # Helper: add override if value is non-empty
   add_override() {
     local var_name="$1" value="$2"
     if [ -n "$value" ]; then
@@ -721,22 +782,21 @@ do_create() {
     fi
   }
 
-  # Per-agent variables that can be overridden
-  local -A PER_AGENT_VARS=(
+  # Flags that were passed for per-agent overrides
+  local -A PER_AGENT_FLAGS=(
     [TELEGRAM_BOT_TOKEN]="$telegram_token"
     [TELEGRAM_CHAT_ID]="$telegram_chat_id"
     [OPENAI_API_KEY]="$openai_key"
     [ANTHROPIC_API_KEY]="$anthropic_key"
   )
 
-  # If running interactively and no flags were provided, prompt for each
   if [ -t 0 ]; then
-    echo "Per-agent secrets (Enter to keep base .env value, or type new value):"
-    local all_vars=(TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY SERPAPI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_PHONE_NUMBER)
-    for var in "${all_vars[@]}"; do
-      # Skip if already set via flag
-      if [ -n "${PER_AGENT_VARS[$var]:-}" ]; then
-        add_override "$var" "${PER_AGENT_VARS[$var]}"
+    echo "Per-agent overrides (Enter to use shared value, or type a new value):"
+    local override_vars=(TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY SERPAPI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_PHONE_NUMBER)
+    for var in "${override_vars[@]}"; do
+      # If passed as flag, use it directly
+      if [ -n "${PER_AGENT_FLAGS[$var]:-}" ]; then
+        add_override "$var" "${PER_AGENT_FLAGS[$var]}"
         continue
       fi
       local current="${!var}"
@@ -752,9 +812,8 @@ do_create() {
       add_override "$var" "$new_val"
     done
   else
-    # Non-interactive: only use flag values
-    for var in "${!PER_AGENT_VARS[@]}"; do
-      add_override "$var" "${PER_AGENT_VARS[$var]}"
+    for var in "${!PER_AGENT_FLAGS[@]}"; do
+      add_override "$var" "${PER_AGENT_FLAGS[$var]}"
     done
   fi
 
@@ -764,7 +823,7 @@ do_create() {
     printf "%s" "$overrides" > "$agent_dir/.env"
     echo "Created $agent_dir/.env with per-agent overrides"
   else
-    echo "No overrides — agent will use base .env values."
+    echo "No per-agent overrides — agent will use shared .env values."
   fi
 
   # Set up env loading for the DB insertion
