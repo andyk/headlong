@@ -296,7 +296,6 @@ start_service() {
           -e TELEGRAM_CHAT_ID \
           -e SERPAPI_API_KEY \
           -e OPENAI_API_KEY \
-          -e OPENROUTER_API_KEY \
           -e HEADLONG_ENV_PORT=8000 \
           -p "$ENV_PORT":8000 \
           -v "$REPO_ROOT":/app/headlong \
@@ -819,7 +818,7 @@ do_create() {
   # --- Optional per-agent overrides ---
   if [ -t 0 ]; then
     echo "Optional overrides (Enter to skip):"
-    local optional_vars=(OPENROUTER_API_KEY SERPAPI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_PHONE_NUMBER)
+    local optional_vars=(SERPAPI_API_KEY)
     for var in "${optional_vars[@]}"; do
       local current="${!var}"
       local display="(not set)"
