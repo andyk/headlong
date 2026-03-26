@@ -723,6 +723,8 @@ do_create() {
     set -a
     source "$REPO_ROOT/.env"
     set +a
+  else
+    echo "  Note: no .env found at $REPO_ROOT/.env"
   fi
 
   # --- Required credentials (written to base .env if missing) ---
