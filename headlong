@@ -768,33 +768,59 @@ do_create() {
   fi
   echo ""
 
-  # --- Per-agent overrides (written to agent .env) ---
-  local overrides=""
+  # --- Per-agent credentials (written to agent .env) ---
+  # Required: Anthropic, OpenAI, Telegram. If already in base .env they're
+  # inherited, but new values go into the agent-specific .env.
+  local agent_env_contents=""
 
-  add_override() {
+  add_agent_var() {
     local var_name="$1" value="$2"
     if [ -n "$value" ]; then
-      overrides+="$var_name=$value"$'\n'
+      agent_env_contents+="$var_name=$value"$'\n'
+      eval "export $var_name=\"\$value\""
     fi
   }
 
-  # Flags that were passed for per-agent overrides
-  local -A PER_AGENT_FLAGS=(
-    [TELEGRAM_BOT_TOKEN]="$telegram_token"
-    [TELEGRAM_CHAT_ID]="$telegram_chat_id"
-    [OPENAI_API_KEY]="$openai_key"
-    [ANTHROPIC_API_KEY]="$anthropic_key"
-  )
-
-  if [ -t 0 ]; then
-    echo "Per-agent overrides (Enter to use shared value, or type a new value):"
-    local override_vars=(TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY SERPAPI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_PHONE_NUMBER)
-    for var in "${override_vars[@]}"; do
-      # If passed as flag, use it directly
-      if [ -n "${PER_AGENT_FLAGS[$var]:-}" ]; then
-        add_override "$var" "${PER_AGENT_FLAGS[$var]}"
-        continue
+  # Helper: ensure a per-agent var has a value. Checks: flag > base .env > prompt.
+  # New values are written to the agent .env, not the base .env.
+  require_agent_var() {
+    local var_name="$1" label="$2" flag_name="$3" flag_val="$4"
+    # Flag value takes priority
+    if [ -n "$flag_val" ]; then
+      add_agent_var "$var_name" "$flag_val"
+      return
+    fi
+    # Already in environment (from base .env)
+    local current="${!var_name}"
+    if [ -n "$current" ]; then
+      return
+    fi
+    # Prompt interactively
+    if [ -t 0 ]; then
+      read -rp "  $label: " new_val
+      if [ -z "$new_val" ]; then
+        echo "  ERROR: $var_name is required."
+        exit 1
       fi
+      add_agent_var "$var_name" "$new_val"
+    else
+      echo "ERROR: $var_name is required. Pass $flag_name or set it in .env"
+      exit 1
+    fi
+  }
+
+  echo "Agent credentials (values not in .env will be saved to $agent_dir/.env):"
+  require_agent_var ANTHROPIC_API_KEY "Anthropic API key" "--anthropic-key" "$anthropic_key"
+  require_agent_var OPENAI_API_KEY "OpenAI API key" "--openai-key" "$openai_key"
+  require_agent_var TELEGRAM_BOT_TOKEN "Telegram bot token" "--telegram-token" "$telegram_token"
+  require_agent_var TELEGRAM_CHAT_ID "Telegram chat ID" "--telegram-chat-id" "$telegram_chat_id"
+  echo ""
+
+  # --- Optional per-agent overrides ---
+  if [ -t 0 ]; then
+    echo "Optional overrides (Enter to skip):"
+    local optional_vars=(OPENROUTER_API_KEY SERPAPI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_PHONE_NUMBER)
+    for var in "${optional_vars[@]}"; do
       local current="${!var}"
       local display="(not set)"
       if [ -n "$current" ]; then
@@ -805,21 +831,16 @@ do_create() {
         fi
       fi
       read -rp "  $var [$display]: " new_val
-      add_override "$var" "$new_val"
+      add_agent_var "$var" "$new_val"
     done
-  else
-    for var in "${!PER_AGENT_FLAGS[@]}"; do
-      add_override "$var" "${PER_AGENT_FLAGS[$var]}"
-    done
+    echo ""
   fi
 
-  echo ""
-
-  if [ -n "$overrides" ]; then
-    printf "%s" "$overrides" > "$agent_dir/.env"
-    echo "Created $agent_dir/.env with per-agent overrides"
+  if [ -n "$agent_env_contents" ]; then
+    printf "%s" "$agent_env_contents" > "$agent_dir/.env"
+    echo "Saved agent secrets to $agent_dir/.env"
   else
-    echo "No per-agent overrides — agent will use shared .env values."
+    echo "All credentials inherited from base .env."
   fi
 
   # Set up env loading for the DB insertion
