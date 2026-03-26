@@ -14,8 +14,14 @@ import threading
 import uvicorn
 from dotenv import load_dotenv
 
-# Load .env from project root
+# Load .env from project root, then per-agent overrides
 load_dotenv(dotenv_path="../../.env")
+if len(sys.argv) >= 2:
+    import re as _re
+    _slug = _re.sub(r'[^a-z0-9-]', '', sys.argv[1].lower().replace(' ', '-'))
+    _agent_env = os.path.join("../../.headlong", _slug, ".env")
+    if os.path.exists(_agent_env):
+        load_dotenv(dotenv_path=_agent_env, override=True)
 
 import supabase_client
 from thought_api import app as fastapi_app, set_agent_name, set_system_prompt, log_activity

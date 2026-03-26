@@ -15,11 +15,15 @@ WEBAPP_PORT=5173
 STATEDIR="$BASE_STATEDIR"
 LOGDIR="$BASE_LOGDIR"
 
+# Sanitize a name for use as a directory/slug (lowercase, spaces to hyphens, alphanumeric only)
+slugify() {
+  echo "$1" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-'
+}
+
 set_agent_dirs() {
   local name="$1"
-  # Sanitize agent name for use as directory name (lowercase, spaces to hyphens)
   local slug
-  slug=$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
+  slug=$(slugify "$name")
   STATEDIR="$BASE_STATEDIR/$slug"
   LOGDIR="$BASE_LOGDIR/$slug"
 }
@@ -129,6 +133,7 @@ usage() {
   echo "Usage: ./headlong <command> [options]"
   echo ""
   echo "Commands:"
+  echo "  create <agent_name> [options]      Create a new agent (config + DB)"
   echo "  start <agent_name> [options]       Start all services"
   echo "  start <service> [options]           Start a single service (env|agent|webapp)"
   echo "  stop  [agent_name] [service]       Stop all or a single service"
@@ -136,7 +141,13 @@ usage() {
   echo "  logs  [agent_name] [service]       Tail logs (all or one service)"
   echo "  list                               List running agents"
   echo ""
-  echo "Options:"
+  echo "Create options:"
+  echo "  --telegram-token TOKEN    Telegram bot token for this agent"
+  echo "  --telegram-chat-id ID     Telegram chat ID for this agent"
+  echo "  --openai-key KEY          OpenAI API key override"
+  echo "  --anthropic-key KEY       Anthropic API key override"
+  echo ""
+  echo "Start options:"
   echo "  --no-docker               Force native mode for env daemon"
   echo "  --env-port PORT           Port for env daemon (default: 8000)"
   echo "  --agent-port PORT         Port for agent daemon (default: 8001)"
@@ -170,11 +181,18 @@ is_running() {
   return 1
 }
 
-# --- Source .env ---
+# --- Source .env (base + per-agent override) ---
 load_env() {
   if [ -f "$REPO_ROOT/.env" ]; then
     set -a
     source "$REPO_ROOT/.env"
+    set +a
+  fi
+  # Per-agent overrides (STATEDIR is set by set_agent_dirs before this is called)
+  local agent_env="$STATEDIR/.env"
+  if [ -f "$agent_env" ]; then
+    set -a
+    source "$agent_env"
     set +a
   fi
 }
@@ -194,7 +212,7 @@ get_agent_name() {
 find_agent_dir() {
   local name="$1"
   local slug
-  slug=$(echo "$name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
+  slug=$(slugify "$name")
   local dir="$BASE_STATEDIR/$slug"
   if [ -d "$dir" ]; then
     echo "$dir"
@@ -261,7 +279,7 @@ start_service() {
         use_docker=true
       fi
 
-      local container_name="headlong-env-$(echo "$agent_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+      local container_name="headlong-env-$(slugify "$agent_name")"
 
       if $use_docker; then
         echo "  Starting env (Docker) on port $ENV_PORT..."
@@ -379,7 +397,7 @@ stop_service() {
   if [ "$svc" = "env" ]; then
     local agent_name
     agent_name=$(get_agent_name)
-    local container_name="headlong-env-$(echo "$agent_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+    local container_name="headlong-env-$(slugify "$agent_name")"
     docker rm -f "$container_name" 2>/dev/null || true
   fi
 }
@@ -612,7 +630,7 @@ do_status() {
   echo ""
 
   # Docker container
-  local container_name="headlong-env-$(echo "$stored_name" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+  local container_name="headlong-env-$(slugify "$stored_name")"
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${container_name}$"; then
     echo "  Docker:  $container_name container running"
   fi
@@ -642,10 +660,229 @@ do_status() {
   fi
 }
 
+# --- Create command ---
+do_create() {
+  local agent_name=""
+  local telegram_token=""
+  local telegram_chat_id=""
+  local openai_key=""
+  local anthropic_key=""
+  local args=("$@")
+  local i=0
+
+  while [ $i -lt ${#args[@]} ]; do
+    case "${args[$i]}" in
+      --telegram-token)
+        i=$((i + 1)); telegram_token="${args[$i]}" ;;
+      --telegram-chat-id)
+        i=$((i + 1)); telegram_chat_id="${args[$i]}" ;;
+      --openai-key)
+        i=$((i + 1)); openai_key="${args[$i]}" ;;
+      --anthropic-key)
+        i=$((i + 1)); anthropic_key="${args[$i]}" ;;
+      *)
+        agent_name="${args[$i]}" ;;
+    esac
+    i=$((i + 1))
+  done
+
+  if [ -z "$agent_name" ]; then
+    echo "Usage: ./headlong create <agent_name> [--telegram-token TOKEN] [--telegram-chat-id ID] ..."
+    exit 1
+  fi
+
+  local slug
+  slug=$(slugify "$agent_name")
+  local agent_dir="$BASE_STATEDIR/$slug"
+
+  echo ""
+  echo "Creating agent: $agent_name (slug: $slug)"
+  echo ""
+
+  # Create agent directory
+  mkdir -p "$agent_dir"
+  echo "$agent_name" > "$agent_dir/agent_name"
+
+  # Load base env for defaults when prompting
+  if [ -f "$REPO_ROOT/.env" ]; then
+    set -a
+    source "$REPO_ROOT/.env"
+    set +a
+  fi
+
+  # Collect per-agent overrides (from flags or interactive prompts)
+  local overrides=""
+
+  # Helper: add override if value is non-empty
+  add_override() {
+    local var_name="$1" value="$2"
+    if [ -n "$value" ]; then
+      overrides+="$var_name=$value"$'\n'
+    fi
+  }
+
+  # Per-agent variables that can be overridden
+  local -A PER_AGENT_VARS=(
+    [TELEGRAM_BOT_TOKEN]="$telegram_token"
+    [TELEGRAM_CHAT_ID]="$telegram_chat_id"
+    [OPENAI_API_KEY]="$openai_key"
+    [ANTHROPIC_API_KEY]="$anthropic_key"
+  )
+
+  # If running interactively and no flags were provided, prompt for each
+  if [ -t 0 ]; then
+    echo "Per-agent secrets (Enter to keep base .env value, or type new value):"
+    local all_vars=(TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID OPENAI_API_KEY ANTHROPIC_API_KEY OPENROUTER_API_KEY SERPAPI_API_KEY TWILIO_ACCOUNT_SID TWILIO_AUTH_TOKEN TWILIO_PHONE_NUMBER)
+    for var in "${all_vars[@]}"; do
+      # Skip if already set via flag
+      if [ -n "${PER_AGENT_VARS[$var]:-}" ]; then
+        add_override "$var" "${PER_AGENT_VARS[$var]}"
+        continue
+      fi
+      local current="${!var}"
+      local display="(not set)"
+      if [ -n "$current" ]; then
+        if [ ${#current} -gt 8 ]; then
+          display="****${current: -4}"
+        else
+          display="****"
+        fi
+      fi
+      read -rp "  $var [$display]: " new_val
+      add_override "$var" "$new_val"
+    done
+  else
+    # Non-interactive: only use flag values
+    for var in "${!PER_AGENT_VARS[@]}"; do
+      add_override "$var" "${PER_AGENT_VARS[$var]}"
+    done
+  fi
+
+  echo ""
+
+  if [ -n "$overrides" ]; then
+    printf "%s" "$overrides" > "$agent_dir/.env"
+    echo "Created $agent_dir/.env with per-agent overrides"
+  else
+    echo "No overrides — agent will use base .env values."
+  fi
+
+  # Set up env loading for the DB insertion
+  set_agent_dirs "$agent_name"
+  load_env
+
+  # Insert agent + environment rows into Supabase
+  echo ""
+  echo "Inserting agent + environment into Supabase..."
+
+  python3 - "$agent_name" "$REPO_ROOT" <<'PYEOF'
+import sys, os
+
+agent_name = sys.argv[1]
+repo_root = sys.argv[2]
+
+url = os.environ.get("SUPABASE_URL_HEADLONG")
+key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY_HEADLONG")
+if not url or not key:
+    print("  ERROR: SUPABASE_URL_HEADLONG and SUPABASE_SERVICE_ROLE_KEY_HEADLONG must be set in .env")
+    sys.exit(1)
+
+from supabase import create_client
+sb = create_client(url, key)
+
+# Default agent system prompt (RLM with REPL)
+agent_prompt = f"""You are the subconscious mind of {agent_name}.
+
+You have a Python REPL available. Write code in ```repl blocks to query the database,
+analyze patterns, build memories, and reason iteratively before producing your thought.
+
+## CRITICAL RULE: Query first, then FINAL in a SEPARATE response.
+
+**Step 1 (first response):** Write ONLY ONE ```repl block that queries and prints recent
+thoughts. Do NOT call FINAL() in this response.
+
+```repl
+recent = sql("SELECT body FROM thoughts WHERE agent_name = %s ORDER BY index DESC LIMIT 15", [agent_name])
+for t in recent[::-1]:
+    print(t["body"][:300])
+    print("---")
+```
+
+**Step 2 (second response):** Now that you've READ the actual thoughts, call FINAL() with
+a thought that directly continues from what you just read.
+
+## Available REPL functions
+
+- `sql(query, params=None)` -- Execute SQL against the database.
+- `llm_query(prompt, max_tokens=1024)` -- Call a sub-LLM for analysis.
+- `embed(text)` -- Get a vector embedding. Returns list of floats.
+- `vector_search(query_text, limit=10)` -- Search memories by similarity.
+- `print(...)` -- Output returned to you as REPL output.
+- `agent_name` -- String variable with the current agent's name.
+
+When ready, call `FINAL("your thought")` or `FINAL_VAR("var_name")`.
+"""
+
+# Default environment system prompt (action selection)
+env_prompt = """Your job is to consider your recent thoughts and then take an action.
+The way you take action is by calling one of the available tools with appropriate arguments.
+If you don't think any tool is appropriate for this action, respond with text starting with "observation: " explaining what you observe.
+When deciding what action to take, use the following stream of recent thoughts for context."""
+
+sb.table("agents").upsert({
+    "name": agent_name,
+    "system_prompt": agent_prompt,
+    "config": {},
+}).execute()
+print("  agents row: OK")
+
+sb.table("environments").upsert({
+    "name": agent_name,
+    "system_prompt": env_prompt,
+    "config": {},
+}).execute()
+print("  environments row: OK")
+
+# Seed first 15 thoughts from Bobby Wilder
+source_agent = "Bobby Wilder"
+result = (
+    sb.table("thoughts")
+    .select("body")
+    .eq("agent_name", source_agent)
+    .order("index", desc=False)
+    .limit(15)
+    .execute()
+)
+
+if result.data:
+    rows = []
+    for i, row in enumerate(result.data):
+        rows.append({
+            "agent_name": agent_name,
+            "body": row["body"],
+            "index": float(i + 1),
+            "metadata": {"seeded": True, "source": source_agent},
+            "created_by": "user",
+        })
+    sb.table("thoughts").insert(rows).execute()
+    print(f"  seeded {len(rows)} starter thoughts (copied from {source_agent})")
+else:
+    print(f"  warning: no thoughts found for {source_agent}, skipping seed")
+PYEOF
+
+  echo ""
+  echo "Agent \"$agent_name\" is ready. Start with:"
+  echo "  ./headlong start \"$agent_name\""
+}
+
 # --- Main dispatch ---
 COMMAND="${1:-}"
 
 case "$COMMAND" in
+  create)
+    shift
+    do_create "$@"
+    ;;
   start)
     shift
     do_start "$@"

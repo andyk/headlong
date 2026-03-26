@@ -10,6 +10,7 @@ from tools.telegram import TOOL as telegram_tool
 from tools.sms import TOOL as sms_tool
 from tools.chat import TOOL as chat_tool
 from tools.time_tool import TOOL as time_tool
+from tools.create_agent import TOOL as create_agent_tool
 
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def register_all() -> None:
     register_tool(sms_tool)
     register_tool(chat_tool)
     register_tool(time_tool)
+    register_tool(create_agent_tool)
 
     log.info("registered tools: %s", list(TOOLS.keys()))
 
