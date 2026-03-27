@@ -852,7 +852,7 @@ do_create() {
   echo ""
   echo "Inserting agent + environment into Supabase..."
 
-  python3 - "$agent_name" "$REPO_ROOT" <<'PYEOF'
+  "$REPO_ROOT/packages/agent/venv/bin/python" - "$agent_name" "$REPO_ROOT" <<'PYEOF'
 import sys, os
 
 agent_name = sys.argv[1]

@@ -12,40 +12,16 @@ Headlong has three processes:
 
 All three share a Supabase `thoughts` table and use Supabase Realtime for coordination.
 
-## Prerequisites
+## Getting Started
 
-### Supabase
+See **[SETUP.md](./SETUP.md)** for the full step-by-step setup guide, including:
 
-You need a [Supabase](https://supabase.com) project. Run the migrations in `migrations/` in order via the Supabase SQL Editor:
+- Creating and configuring your Supabase project
+- Running database migrations (`./scripts/run_migrations.sh`)
+- Installing dependencies
+- Creating your first agent
 
-```
-migrations/001_agent_env_schema.sql
-migrations/002_system_prompt_history.sql
-migrations/003_memories_table.sql
-migrations/004_thought_embeddings.sql
-migrations/005_thought_created_by.sql
-```
-
-### Environment variables
-
-Create a `.env` file in the project root:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-SUPABASE_URL_HEADLONG=https://your-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY_HEADLONG=eyJ...
-SUPABASE_ANON_KEY_HEADLONG=eyJ...
-OPENAI_API_KEY=sk-...              # for embeddings (text-embedding-3-small)
-SERPAPI_API_KEY=...                 # for web search tool
-TELEGRAM_BOT_TOKEN=...             # optional, for Telegram messaging
-TELEGRAM_CHAT_ID=...               # optional, for Telegram messaging
-```
-
-The agent daemon also needs a direct Postgres connection for the REPL's `sql()` function. Set this in your `.env`:
-
-```
-SUPABASE_DB_URL_HEADLONG=postgresql://postgres.[project-ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
-```
+Copy `.env.example` to `.env` to get started with environment configuration.
 
 ## Install via Claude Code, Codex, etc.
 
@@ -222,8 +198,12 @@ The Docker image includes tmux, Node.js, Claude Code CLI, and Playwright with Ch
 ```
 headlong
 ├── headlong                  # CLI to start/stop/status all services
+├── SETUP.md                  # Step-by-step setup guide for new users
 ├── .env                      # Environment variables (not committed)
-├── migrations/               # Supabase SQL migrations (run manually)
+├── .env.example              # Template with comments for each variable
+├── scripts/
+│   └── run_migrations.sh     # Runs all Supabase migrations in order
+├── migrations/               # Supabase SQL migrations
 ├── packages/
 │   ├── agent/                # Agent daemon (Python, port 8001)
 │   │   ├── main.py           # Entry point
