@@ -14,6 +14,19 @@ Follow these steps in order to get your own Headlong instance running.
 
 ---
 
+## Before you begin: generate your passwords
+
+You'll need two passwords ready before starting:
+
+1. **Supabase database password** — Supabase asks you to set this when you create the project. Save it — you'll need it to construct `SUPABASE_DB_URL` in Step 1.
+
+2. **Agent REPL password** — a separate password you generate yourself for the restricted `agent_repl` database role created in Step 2. Generate one now and keep it handy:
+   ```bash
+   openssl rand -base64 32
+   ```
+
+---
+
 ## Step 1: Configure base `.env`
 
 Copy the example and fill in your Supabase values:
@@ -50,7 +63,7 @@ Leave `AGENT_REPL_DB_URL` blank for now — you'll fill it in after Step 2.
 
 ## Step 2: Run Migrations
 
-Choose a strong password for the `agent_repl` database role, then run:
+Use the agent REPL password you generated above, then run:
 
 ```bash
 export AGENT_REPL_PASSWORD=your-strong-password-here
