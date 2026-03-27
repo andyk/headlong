@@ -30,6 +30,7 @@ See `.env.example` for where to find each value. The required ones are:
 - `SUPABASE_SERVICE_ROLE_KEY_HEADLONG` — from Supabase → Project Settings → API
 - `SUPABASE_ID_HEADLONG` — your project ref (the part before `.supabase.co`)
 - `SUPABASE_DB_URL` — session pooler connection string (see below)
+- `OPENAI_API_KEY` — required for thought embeddings (every thought is embedded with `text-embedding-3-small` for vector search)
 
 **Finding your `SUPABASE_DB_URL`:**
 
@@ -140,6 +141,16 @@ Then open: http://localhost:5173
 
 Type a message in the editor and press Enter. The agent should respond within a few seconds.
 Thoughts appear in the stream in real time.
+
+---
+
+## Telegram Setup (optional)
+
+Telegram lets the agent send and receive messages. To enable it:
+
+1. Message **@BotFather** on Telegram → `/newbot` → follow prompts → copy the token into `TELEGRAM_BOT_TOKEN`
+2. Find your personal user ID by messaging **@userinfobot** — it replies instantly with your ID. Set this as `TELEGRAM_CHAT_ID`. This is **your** user ID, not the bot's.
+3. Send `/start` to your bot in Telegram. This is required before the bot is allowed to message you — without it you'll get a "Forbidden: bots can't initiate conversations" error.
 
 ---
 
