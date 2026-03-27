@@ -8,40 +8,41 @@ Follow these steps in order to get your own Headlong instance running.
 
 - Python 3.10+
 - Node.js 18+
+- tmux (`brew install tmux`)
 - [psql](https://www.postgresql.org/docs/current/app-psql.html) (`brew install libpq && export PATH="/opt/homebrew/opt/libpq/bin:$PATH"`)
 - A [Supabase](https://supabase.com) project
-- An [Anthropic](https://console.anthropic.com) API key
 
 ---
 
-## Step 1: Configure `.env`
+## Step 1: Configure base `.env`
 
-Copy the example and fill in your values:
+Copy the example and fill in your Supabase values:
 
 ```bash
 cp .env.example .env
 ```
 
-See `.env.example` for where to find each value. The required ones are:
+The base `.env` only needs **Supabase credentials** — per-agent credentials
+(Anthropic, OpenAI, Telegram) are handled in Step 4 by `./headlong create`.
 
-- `ANTHROPIC_API_KEY` — from console.anthropic.com
-- `SUPABASE_URL_HEADLONG` — your Supabase project URL
-- `SUPABASE_ANON_KEY_HEADLONG` — from Supabase → Project Settings → API
+Required values:
+
+- `SUPABASE_URL_HEADLONG` — your project URL (`https://<ref>.supabase.co`)
 - `SUPABASE_SERVICE_ROLE_KEY_HEADLONG` — from Supabase → Project Settings → API
-- `SUPABASE_ID_HEADLONG` — your project ref (the part before `.supabase.co`)
+- `SUPABASE_ANON_KEY_HEADLONG` — from Supabase → Project Settings → API
+- `SUPABASE_ID_HEADLONG` — just the project ref (e.g. `abcdefghij`)
 - `SUPABASE_DB_URL` — session pooler connection string (see below)
-- `OPENAI_API_KEY` — required for thought embeddings (every thought is embedded with `text-embedding-3-small` for vector search)
 
-**Finding your `SUPABASE_DB_URL`:**
+**Finding `SUPABASE_DB_URL`:**
 
 Go to Supabase → Project Settings → Database → Connection Pooling.
-Copy the **Session mode** URI (port 5432). It looks like:
+Copy the **Session mode** URI (port 5432):
 ```
 postgresql://postgres.<ref>:[db-password]@aws-0-<region>.pooler.supabase.com:5432/postgres
 ```
 
 > Note: The direct `db.<ref>.supabase.co` host is disabled on newer Supabase projects.
-> Use the pooler URL. Make sure it's port **5432** (session mode), not 6543 (transaction mode).
+> Use the pooler URL at port **5432** (session mode), not 6543 (transaction mode).
 
 Leave `AGENT_REPL_DB_URL` blank for now — you'll fill it in after Step 2.
 
@@ -63,11 +64,11 @@ After it completes, fill in `AGENT_REPL_DB_URL` in your `.env`:
 ```
 AGENT_REPL_DB_URL=postgresql://agent_repl.<ref>:<AGENT_REPL_PASSWORD>@<your-pooler-host>:5432/postgres
 ```
-(Same host as `SUPABASE_DB_URL`, just swap the username to `agent_repl.<ref>` and the password.)
+(Same host as `SUPABASE_DB_URL`, swap the username to `agent_repl.<ref>` and use the password you just set.)
 
 ---
 
-## Step 3: Install Python Dependencies
+## Step 3: Install Dependencies
 
 **Env daemon:**
 ```bash
@@ -78,6 +79,9 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
+> If you get SSL certificate errors on macOS (Python 3.13+), run:
+> `/Applications/Python\ 3.13/Install\ Certificates.command`
+
 **Agent daemon:**
 ```bash
 cd packages/agent
@@ -86,10 +90,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
----
-
-## Step 4: Install Node Dependencies
-
+**Webapp:**
 ```bash
 cd packages/webapp
 npm install
@@ -97,24 +98,39 @@ npm install
 
 ---
 
-## Step 5: Create Your Agent
+## Step 4: Create Your Agent
 
-In the Supabase SQL Editor, insert an agent record:
+The `./headlong create` command sets up everything for a new agent — creates the
+database rows, config directory, and prompts for per-agent credentials:
 
-```sql
-INSERT INTO agents (name, system_prompt, config) VALUES (
-  'My Agent',
-  NULL,        -- NULL uses the default RLM system prompt
-  '{}'::jsonb
-);
+```bash
+./headlong create "My Agent"
 ```
 
-Replace `'My Agent'` with whatever name you want. See
-`migrations/007_dev_prototype_agent.sql` for an example with a custom system prompt.
+It will interactively prompt for:
+- **Anthropic API key** — from [console.anthropic.com](https://console.anthropic.com)
+- **OpenAI API key** — from [platform.openai.com](https://platform.openai.com/api-keys) (used for thought embeddings)
+- **Telegram bot token** — create a bot via @BotFather on Telegram → `/newbot`
+- **Telegram chat ID** — your personal Telegram user ID (find it by messaging @userinfobot)
+
+These are saved to `.headlong/<agent-slug>/.env`, not the base `.env`.
+
+You can also pass credentials as flags for non-interactive use:
+```bash
+./headlong create "My Agent" \
+  --anthropic-key sk-ant-... \
+  --openai-key sk-... \
+  --telegram-token 123:AAH... \
+  --telegram-chat-id 123456789
+```
+
+**Telegram note:** After setting up your bot, send `/start` to it in Telegram.
+This is required before the bot can message you — without it you'll get
+"Forbidden: bots can't initiate conversations".
 
 ---
 
-## Step 6: Start Everything
+## Step 5: Start Everything
 
 ```bash
 ./headlong start "My Agent"
@@ -137,27 +153,20 @@ Then open: http://localhost:5173
 
 ---
 
-## Step 7: Test It
+## Step 6: Test It
 
-Type a message in the editor and press Enter. The agent should respond within a few seconds.
-Thoughts appear in the stream in real time.
-
----
-
-## Telegram Setup (optional)
-
-Telegram lets the agent send and receive messages. To enable it:
-
-1. Message **@BotFather** on Telegram → `/newbot` → follow prompts → copy the token into `TELEGRAM_BOT_TOKEN`
-2. Find your personal user ID by messaging **@userinfobot** — it replies instantly with your ID. Set this as `TELEGRAM_CHAT_ID`. This is **your** user ID, not the bot's.
-3. Send `/start` to your bot in Telegram. This is required before the bot is allowed to message you — without it you'll get a "Forbidden: bots can't initiate conversations" error.
+Type a message in the editor and press Enter. The agent should respond within a
+few seconds. Thoughts appear in the stream in real time.
 
 ---
 
 ## Troubleshooting
 
-- **`relation "agents" does not exist`** — Run migrations starting from `000_initial_schema.sql`
+- **`relation "agents" does not exist`** — Make sure migrations ran from `000_initial_schema.sql` onwards
 - **DB connection errors** — Use the session pooler URL (port 5432). The direct `db.<ref>.supabase.co` host is not available on newer projects.
-- **`agent_repl` login fails** — Verify the password in `AGENT_REPL_DB_URL` matches what you passed as `AGENT_REPL_PASSWORD` when running migrations
-- **Agent not responding** — Check agent daemon logs: `./headlong logs agent`
+- **`agent_repl` login fails** — Verify the password in `AGENT_REPL_DB_URL` matches `AGENT_REPL_PASSWORD` used during migration
+- **SSL certificate errors on macOS** — Run `/Applications/Python\ 3.X/Install\ Certificates.command`
+- **Agent not responding** — Check logs: `./headlong logs agent`
+- **Telegram "Forbidden: bots can't initiate conversations"** — Send `/start` to your bot in Telegram first
+- **Telegram messages going to wrong person** — `TELEGRAM_CHAT_ID` should be your user ID (find via @userinfobot), not the bot's ID
 - **Realtime not working** — Supabase → Database → Replication → confirm `thoughts` and `agents` are in the `supabase_realtime` publication
