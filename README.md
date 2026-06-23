@@ -27,7 +27,7 @@ Copy `.env.example` to `.env` to get started with environment configuration.
 
 If you have an AI coding agent like [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex, you can paste the following prompt to have it set up Headlong for you:
 
-> Clone https://github.com/bobbywilder/headlong and follow the README to set it up. I have already created a Supabase project and run the migrations. My Supabase credentials and API keys are in my `.env` file at the project root. Set up the Python virtual environments, install dependencies (including Playwright), and install the webapp's npm packages.
+> Clone https://github.com/andyk/headlong and follow the README to set it up. I have already created a Supabase project and run the migrations. My Supabase credentials and API keys are in my `.env` file at the project root. Set up the Python virtual environments, install dependencies (including Playwright), and install the webapp's npm packages.
 
 **Before running this, you must:**
 1. Create a [Supabase](https://supabase.com) project
